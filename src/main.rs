@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use image::GenericImageView;
 
@@ -67,10 +67,12 @@ struct Sprite {
     velocity: Vector,
     ground_contact: bool,
     jumping: bool,
+    vy_slop: f32,
+    color: Color,
 }
 
 impl Sprite {
-    fn new(gfx: &Graphics, src: &image::DynamicImage, x: usize, y: usize, xx: f32, yy: f32, scale: u32) -> Self {
+    fn new(gfx: &Graphics, src: &image::DynamicImage, x: usize, y: usize, xx: f32, yy: f32, scale: u32, color: Color) -> Self {
         let (image, collider) = extract_sprite(gfx, src, x, y);
         Self {
             image,
@@ -80,24 +82,23 @@ impl Sprite {
             velocity: Vector::new(0.0, 0.0),
             ground_contact: false,
             jumping: false,
+            vy_slop: 0.0,
+            color,
         }
     }
 
-    fn draw(&self, gfx: &mut Graphics) {
-        let region = Rectangle::new(self.loc, Vector::new(SPRITE_WIDTH as f32 * self.scale as f32, SPRITE_WIDTH as f32 * self.scale as f32));
-        gfx.draw_image(&self.image, region);
-    }
-
     fn overlap(&self, other: &Sprite) -> bool {
-        let a = vek::geom::Rect::new(self.loc.x as i32, self.loc.y as i32, SPRITE_WIDTH as i32, SPRITE_WIDTH as i32);
-        let b = vek::geom::Rect::new(other.loc.x as i32, other.loc.y as i32, SPRITE_WIDTH as i32, SPRITE_WIDTH as i32);
+        let a = vek::geom::Rect::new(self.loc.x as i32, self.loc.y as i32, SPRITE_WIDTH as i32 * self.scale as i32, SPRITE_WIDTH as i32 * self.scale as i32);
+        let b = vek::geom::Rect::new(other.loc.x as i32, other.loc.y as i32, SPRITE_WIDTH as i32 * other.scale as i32, SPRITE_WIDTH as i32 * other.scale as i32);
         if a.collides_with_rect(b) {
             let c = a.intersection(b);
             for x in c.x..c.x+c.w {
                 for y in c.y..c.y+c.h {
-                    let ai = (x as usize - self.loc.x as usize) + (y as usize - self.loc.y as usize) * SPRITE_WIDTH;
+                    let (dx, dy) = to_scale(x as i32 - self.loc.x as i32, y as i32 - self.loc.y as i32, self.scale);
+                    let ai = dx as usize + dy as usize * SPRITE_WIDTH;
                     if self.collider[ai] {
-                        let bi = (x as usize - other.loc.x as usize) + (y as usize - other.loc.y as usize) * SPRITE_WIDTH;
+                        let (dx, dy) = to_scale(x as i32 - other.loc.x as i32, y as i32 - other.loc.y as i32, other.scale);
+                        let bi = dx as usize + dy as usize * SPRITE_WIDTH;
                         if other.collider[bi] {
                             return true
                         }
@@ -110,8 +111,11 @@ impl Sprite {
 }
 
 struct Scene {
-    sprites: Vec<Sprite>,
+    sprites: HashMap<usize, Sprite>,
+    potions: Vec<(usize, i32)>,
+    characters: Vec<usize>,
     terrain_grids: HashMap<u32, HashMap<(i32, i32), bool>>,
+    next_id: usize,
 }
 
 fn to_scale(x: i32, y: i32, scale: u32) -> (i32, i32) {
@@ -129,9 +133,31 @@ fn from_scale(x: i32, y: i32, scale: u32) -> (i32, i32) {
 impl Scene {
     fn new() -> Self {
         Self {
-            sprites: vec![],
+            sprites: HashMap::new(),
             terrain_grids: HashMap::new(),
+            potions: vec![],
+            characters: vec![],
+            next_id: 0,
         }
+    }
+
+    fn add_sprite(&mut self, sprite: Sprite) -> usize {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.sprites.insert(id, sprite);
+        id
+    }
+
+    fn add_potion(&mut self, sprite: Sprite, delta: i32) -> usize {
+        let id = self.add_sprite(sprite);
+        self.potions.push((id, delta));
+        id
+    }
+
+    fn add_character(&mut self, sprite: Sprite) -> usize {
+        let id = self.add_sprite(sprite);
+        self.characters.push(id);
+        id
     }
 
     fn add_terrain(&mut self, sprite: &Sprite) {
@@ -148,28 +174,85 @@ impl Scene {
     }
 
     fn step_physics(&mut self) {
-        for sprite in &mut self.sprites {
+        for sprite in self.sprites.values_mut() {
             sprite.velocity.y += 3.4 / FPS;
             sprite.loc.x += sprite.velocity.x * sprite.scale as f32;
             let mut blocked = false;
-            if sprite.velocity.y > 0.0 {
-                'outer: for x in 0..SPRITE_WIDTH {
+            let mut vy = sprite.velocity.y * sprite.scale as f32;
+            let mut loc_y = sprite.loc.y;
+            'outer: while vy.abs() >= 1.0 {
+                loc_y += 1.0f32.copysign(sprite.velocity.y);
+                vy -= 1.0f32.copysign(sprite.velocity.y);
+                for x in 0..SPRITE_WIDTH {
                     for y in 0..SPRITE_WIDTH {
                         if sprite.collider[x as usize + y as usize * SPRITE_WIDTH as usize] {
                             for (scale, grid) in &self.terrain_grids {
-                                if *scale == sprite.scale {
-                                    if let Some(true) = grid.get(&(x as i32 + sprite.loc.x as i32 / sprite.scale as i32,y as i32 + sprite.loc.y as i32/sprite.scale as i32)) {
-                                        blocked = true;
-                                        break 'outer;
+                                for ddx in 0..sprite.scale {
+                                    for ddy in 0..sprite.scale {
+                                        let (dx, dy) = from_scale(x as i32, y as i32, sprite.scale);
+                                        let x = sprite.loc.x as i32 + dx + ddx as i32;
+                                        let y = loc_y as i32 + dy + ddy as i32;
+                                        let (x, y) = to_scale(x , y, *scale);
+                                        if let Some(true) = grid.get(&(x, y)) {
+                                            blocked = true;
+                                            break 'outer;
+                                        }
                                     }
-                                } else {
-                                    let (dx, dy) = from_scale(x as i32, y as i32, sprite.scale);
-                                    let x = sprite.loc.x as i32 + dx;
-                                    let y = sprite.loc.y as i32 + dy;
+                                }
+                            }
+                        }
+                    }
+                }
+                sprite.loc.y = loc_y;
+            }
+            if !blocked {
+                if sprite.velocity.y.abs() >= 1.0 {
+                    sprite.ground_contact = false;
+                }
+            } else if !sprite.ground_contact {
+                sprite.velocity.y = 0.0;
+                sprite.ground_contact = true;
+                sprite.jumping = false;
+            }
+        }
+
+        let mut scale_changes = vec![];
+        let mut consumed = HashSet::new();
+        for character_id in &self.characters {
+            let character = &self.sprites[character_id];
+            for (potion_id, delta) in &self.potions {
+                if consumed.contains(potion_id) {
+                    continue;
+                }
+                let potion = &self.sprites[potion_id];
+                if character.overlap(potion) {
+                    consumed.insert(*potion_id);
+                    scale_changes.push((*character_id, *delta));
+                }
+            }
+        }
+        for potion_id in consumed {
+            self.potions.retain(|(id, _)| *id != potion_id);
+            self.sprites.remove(&potion_id);
+        }
+        for (character_id, delta) in scale_changes {
+            let character = self.sprites.get_mut(&character_id).unwrap();
+            character.scale = (character.scale as i32 + delta).max(1) as u32;
+            character.loc.x -= SPRITE_WIDTH as f32 * delta as f32 * 0.5;
+            character.loc.y -= SPRITE_WIDTH as f32 * delta as f32;
+            let mut collisions = vec![];
+            for x in 0..SPRITE_WIDTH {
+                for y in 0..SPRITE_WIDTH {
+                    if character.collider[x as usize + y as usize * SPRITE_WIDTH as usize] {
+                        for (scale, grid) in &self.terrain_grids {
+                            for ddx in 0..character.scale {
+                                for ddy in 0..character.scale {
+                                    let (dx, dy) = from_scale(x as i32, y as i32, character.scale);
+                                    let x = character.loc.x as i32 + dx + ddx as i32;
+                                    let y = character.loc.y as i32 + dy - ddy as i32;
                                     let (x, y) = to_scale(x, y, *scale);
                                     if let Some(true) = grid.get(&(x, y)) {
-                                        blocked = true;
-                                        break 'outer;
+                                        collisions.push((*scale, (x, y)));
                                     }
                                 }
                             }
@@ -177,22 +260,17 @@ impl Scene {
                     }
                 }
             }
-            if !blocked {
-                sprite.loc.y += sprite.velocity.y * sprite.scale as f32;
-                sprite.ground_contact = false;
-            } else if !sprite.ground_contact {
-                sprite.velocity.y = 0.0;
-                sprite.ground_contact = true;
-                sprite.jumping = false;
+            for (scale, (x,y)) in collisions {
+                self.terrain_grids.get_mut(&scale).unwrap().remove(&(x,y));
             }
         }
     }
 
-    fn draw(&self, gfx: &mut Graphics, x: i32, y: i32, width: u32, height: u32, scale: u32) {
+    fn draw(&self, gfx: &mut Graphics, x: i32, y: i32, width: u32, height: u32, scale: f32) {
         let mut pixels = vec![0; width as usize * height as usize * 3];
-        for sprite in &self.sprites {
+        for sprite in self.sprites.values() {
             for dx in 0..SPRITE_WIDTH*sprite.scale as usize {
-                let lx = dx /sprite.scale as usize;
+                let lx = dx / sprite.scale as usize;
                 let xx = sprite.loc.x as i32 + dx as i32;
                 if xx < x || xx >= x+width as i32 {
                     continue
@@ -202,12 +280,14 @@ impl Scene {
                     if yy < y || yy >= y+width as i32 {
                         continue
                     }
-                    let ly = dy /sprite.scale as usize;
+                    let ly = dy / sprite.scale as usize;
                     if sprite.collider[lx + ly*SPRITE_WIDTH] {
                         let i = ((xx - x) as usize + (yy -y) as usize * width as usize)*3;
-                        pixels[i] = 0xff;
-                        pixels[i+1] = 0x00;
-                        pixels[i+2] = 0x00;
+                        if i < pixels.len() {
+                            pixels[i] = (sprite.color.r * 255.0) as u8;
+                            pixels[i+1] = (sprite.color.g * 255.0) as u8;
+                            pixels[i+2] = (sprite.color.b * 255.0) as u8;
+                        }
                     }
                 }
             }
@@ -220,10 +300,12 @@ impl Scene {
                             for dy in 0..*scale as usize {
                                 let lx = xx * *scale as i32 - x + dx as i32;
                                 let ly = yy * *scale as i32 - y + dy as i32;
-                                let i = (lx + ly * width as i32) as usize * 3;
-                                pixels[i] = 0x00;
-                                pixels[i+1] = 0xff;
-                                pixels[i+2] = 0x00;
+                                if lx >= 0 && lx < width as i32 && ly >= 0 && ly < height as i32 {
+                                    let i = (lx + ly * width as i32) as usize * 3;
+                                    pixels[i] = 0x00;
+                                    pixels[i+1] = 0xff;
+                                    pixels[i+2] = 0x00;
+                                }
                             }
                         }
                     }
@@ -249,34 +331,45 @@ impl Scene {
 async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> {
     let sprites = image::load(std::io::Cursor::new(SPRITES), image::ImageFormat::Png).unwrap();
     let mut scene = Scene::new();
-    let player_id = 0;
-    scene.sprites.push(Sprite::new(&gfx, &sprites, 31, 2, 100.0, 10.0, 16));
-    scene.sprites.push(Sprite::new(&gfx, &sprites, 33, 13, 100.0, 10.0, 2));
-    scene.sprites.push(Sprite::new(&gfx, &sprites, 34, 13, 100.0, 10.0, 2));
+    let player_id = scene.add_character(Sprite::new(&gfx, &sprites, 31, 2, 300.0, 688.0, 7, Color::BLUE));
+    for x in 0..10 {
+        scene.add_potion(Sprite::new(&gfx, &sprites, 33, 13, (x as f32 * 2.0) *100.0, 688.0, 2, Color::RED), 1);
+    }
+    for x in 0..10 {
+        scene.add_potion(Sprite::new(&gfx, &sprites, 33, 13, (x as f32 * 2.0 + 1.0) *100.0, 688.0, 2, Color::BLUE), -1);
+    }
 
-    let castle = Sprite::new(&gfx, &sprites, 2, 19, 100.0, 400.0, 7);
+    for x in 0..20 {
+        scene.add_terrain(&Sprite::new(&gfx, &sprites, 7, 5, (x*(SPRITE_WIDTH-2)*7) as f32, 800.0, 7, Color::BLUE));
+    }
     for x in 0..100 {
-        scene.add_terrain(&Sprite::new(&gfx, &sprites, 7, 5, (x*(SPRITE_WIDTH-2)*7) as f32, 800.0, 7));
+        scene.add_terrain(&Sprite::new(&gfx, &sprites, 20, 15, (x*SPRITE_WIDTH*7) as f32, 590.0, 7, Color::BLUE));
     }
 
     let mut update_timer = Timer::time_per_second(FPS);
     let mut draw_timer = Timer::time_per_second(FPS);
+    let mut camera = Vector::new(0.0, 0.0);
     loop {
         while let Some(e) = input.next_event().await {
+            let vx = if input.key_down(Key::LShift) {
+                92.0
+            } else {
+                46.0
+            };
             match e {
                 Event::KeyboardInput(e) => {
-                    let player = &mut scene.sprites[player_id];
+                    let player = scene.sprites.get_mut(&player_id).unwrap();
                     match e.key() {
                         Key::Right => {
                             if e.is_down() {
-                                player.velocity.x = 23.0 / FPS;
+                                player.velocity.x = vx / FPS;
                             } else {
                                 player.velocity.x = 0.0;
                             }
                         },
                         Key::Left => {
                             if e.is_down() {
-                                player.velocity.x = -23.0 / FPS;
+                                player.velocity.x = -vx / FPS;
                             } else {
                                 player.velocity.x = 0.0;
                             }
@@ -313,9 +406,12 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
             scene.step_physics();
         }
         if draw_timer.exhaust().is_some() {
+            let player = scene.sprites.get_mut(&player_id).unwrap();
+            camera.x = player.loc.x - 1920.0/2.0;
+            camera.y = player.loc.y - 1080.0/2.0;
             gfx.clear(Color::WHITE);
-            scene.draw(&mut gfx, 0, 0, 1920, 1080, 1);
-            //scene.draw_terrain(&mut gfx, 1920, 1080);
+            let scale = player.scale as f32 / 8.0;
+            scene.draw(&mut gfx, camera.x as i32, camera.y as i32, 1920, 1080, scale);
             gfx.present(&window)?;
         }
     }
