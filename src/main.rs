@@ -16,6 +16,7 @@ const SPRITES_HEIGHT:usize = 352;
 const SPRITE_WIDTH:usize = 16;
 const PIXEL_CHUNK: u32 = 4;
 const MAX_SCALE: usize = 18;
+const SCALE_CHANGE_TIMEOUT: f32 = 2.0;
 
 const FPS: f32 = 60.0;
 
@@ -61,6 +62,9 @@ struct Sprite {
     jumping: bool,
     vy_slop: f32,
     color: Color,
+    scale_timer: Option<f32>,
+    pending_scale: i32,
+    sleep_timer: f32,
 }
 
 impl Sprite {
@@ -79,6 +83,9 @@ impl Sprite {
             jumping: false,
             vy_slop: 0.0,
             color,
+            scale_timer: None,
+            pending_scale: 0,
+            sleep_timer: 0.0,
         }
     }
 
@@ -449,12 +456,24 @@ impl Scene {
                 }
                 sprite.velocity.y = 0.0;
             }
+            if sprite.ground_contact {
+                if sprite.velocity.x >= 0.0 {
+                    sprite.velocity.x = (sprite.velocity.x - 1.0/FPS).max(0.0);
+                } else {
+                    sprite.velocity.x = (sprite.velocity.x + 1.0/FPS).min(0.0);
+                }
+            }
+            if sprite.velocity.x != 0.0 || sprite.velocity.y != 0.0 {
+                sprite.sleep_timer = 0.0;
+            } else {
+                sprite.sleep_timer += 1.0/FPS;
+            }
         }
 
         let mut to_remove = IndexSet::new();
         for particle_id in &self.particles {
             let sprite = &self.sprites[particle_id];
-            if sprite.ground_contact {
+            if sprite.ground_contact && sprite.sleep_timer > 0.5 {
                 to_remove.insert(*particle_id);
                 for x in 0..SPRITE_WIDTH {
                     for y in 0..SPRITE_WIDTH {
@@ -476,7 +495,7 @@ impl Scene {
         self.particles.retain(|pid| !to_remove.contains(pid));
         self.sprites.retain(|pid, _| !to_remove.contains(pid));
 
-        let mut scale_changes = vec![];
+        let mut drinkers = vec![];
         let mut consumed = IndexSet::new();
         for character_id in &self.characters {
             let character = &self.sprites[character_id];
@@ -487,7 +506,7 @@ impl Scene {
                 let potion = &self.sprites[potion_id];
                 if character.overlap(potion) {
                     consumed.insert(*potion_id);
-                    scale_changes.push((*character_id, *delta));
+                    drinkers.push((*character_id, *delta));
                 }
             }
         }
@@ -496,34 +515,55 @@ impl Scene {
             self.sprites.remove(&potion_id);
         }
         let mut new_sprites = vec![];
-        for (sprite_id, delta) in scale_changes {
+        for (sprite_id, delta) in drinkers {
             let sprite = self.sprites.get_mut(&sprite_id).unwrap();
-            sprite.scale = (sprite.scale as i32 + delta).max(1) as u32;
-            sprite.loc.x -= SPRITE_WIDTH as f32 * delta as f32 * 0.5;
-            sprite.loc.y -= SPRITE_WIDTH as f32 * delta as f32;
-            let cx = sprite.loc.x + SPRITE_WIDTH as f32 / 2.0;
-            let cy = sprite.loc.y + SPRITE_WIDTH as f32 / 2.0;
-            for dx in 0..SPRITE_WIDTH {
-                for dy in 0..SPRITE_WIDTH-1 {
-                    let i = dx + dy*SPRITE_WIDTH;
-                    if true || sprite.collider[i] {
-                        let x = sprite.loc.x as i32 + dx as i32 * sprite.scale as i32;
-                        let y = sprite.loc.y as i32 + dy as i32 * sprite.scale as i32;
-                        if self.collision_map.remove_rect(x, y, sprite.scale, sprite.scale).1 > 0 {
-                            let mut collider = [false; SPRITE_WIDTH*SPRITE_WIDTH];
-                            collider[0] = true;
-                            let mut new_sprite = Sprite::from_collider(collider, x as f32, y as f32, sprite.scale, Color::GREEN);
-                            let a = (cy-y as f32).atan2(cx - x as f32) - std::f32::consts::FRAC_PI_2;
-                            new_sprite.velocity = Vector::new(a.cos() * -20.0/FPS, a.sin() * -20.0/FPS);
-                            new_sprites.push(new_sprite);
-                            for xx in 0..sprite.scale {
-                                for yy in 0..sprite.scale {
-                                    let cx = sprite.loc.x as i32 + dx as i32 * sprite.scale as i32 + xx as i32;
-                                    let cy = sprite.loc.y as i32 + dy as i32 * sprite.scale as i32 + yy as i32;
-                                    self.tile_cache.remove(&(cx / TILE_SIZE as i32, cy / TILE_SIZE as i32));
+            if sprite.scale_timer.is_none() {
+                sprite.scale_timer = Some(SCALE_CHANGE_TIMEOUT);
+            }
+            sprite.pending_scale += delta;
+        }
+
+        for character_id in self.characters.clone() {
+            let sprite = self.sprites.get_mut(&character_id).unwrap();
+            if let Some(time) = sprite.scale_timer.as_mut() {
+                *time -= 1.0/FPS;
+                if *time > 0.0 {
+                    continue
+                }
+                sprite.scale_timer.take();
+                let delta = sprite.pending_scale;
+                sprite.pending_scale = 0;
+                if delta == 0 {
+                    continue
+                }
+                sprite.scale = (sprite.scale as i32 + delta).max(1) as u32;
+                sprite.loc.x -= SPRITE_WIDTH as f32 * delta as f32 * 0.5;
+                sprite.loc.y -= SPRITE_WIDTH as f32 * delta as f32;
+                if delta > 0 {
+                    let cx = sprite.loc.x + SPRITE_WIDTH as f32 / 2.0;
+                    let cy = sprite.loc.y + SPRITE_WIDTH as f32 / 2.0;
+                    for dx in 0..SPRITE_WIDTH {
+                        for dy in -1..SPRITE_WIDTH as i32-1 {
+                            if true {
+                                let x = sprite.loc.x as i32 + dx as i32 * sprite.scale as i32;
+                                let y = sprite.loc.y as i32 + dy as i32 * sprite.scale as i32;
+                                if self.collision_map.remove_rect(x, y, sprite.scale, sprite.scale).1 > 0 {
+                                    let mut collider = [false; SPRITE_WIDTH*SPRITE_WIDTH];
+                                    collider[0] = true;
+                                    let mut new_sprite = Sprite::from_collider(collider, x as f32, y as f32, sprite.scale, Color::GREEN);
+                                    let a = (cy-y as f32).atan2(cx - x as f32);
+                                    new_sprite.velocity = Vector::new(a.cos() * 100.0/FPS, a.sin() * 100.0/FPS);
+                                    new_sprites.push(new_sprite);
+                                    for xx in 0..sprite.scale {
+                                        for yy in 0..sprite.scale {
+                                            let cx = sprite.loc.x as i32 + dx as i32 * sprite.scale as i32 + xx as i32;
+                                            let cy = sprite.loc.y as i32 + dy as i32 * sprite.scale as i32 + yy as i32;
+                                            self.tile_cache.remove(&(cx / TILE_SIZE as i32, cy / TILE_SIZE as i32));
+                                        }
+                                    }
+
                                 }
                             }
-
                         }
                     }
                 }
@@ -628,29 +668,26 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
     let mut update_timer = Timer::time_per_second(FPS);
     let mut draw_timer = Timer::time_per_second(FPS);
     let mut camera = Vector::new(0.0, 0.0);
+    let mut moving_left = false;
+    let mut moving_right = false;
     loop {
         while let Some(e) = input.next_event().await {
-            let vx = if input.key_down(Key::LShift) {
-                92.0
-            } else {
-                46.0
-            };
+            let player = scene.sprites.get_mut(&player_id).unwrap();
             match e {
                 Event::KeyboardInput(e) => {
-                    let player = scene.sprites.get_mut(&player_id).unwrap();
                     match e.key() {
                         Key::Right => {
                             if e.is_down() {
-                                player.velocity.x = vx / FPS;
+                                moving_right = true;
                             } else {
-                                player.velocity.x = 0.0;
+                                moving_right = false;
                             }
                         },
                         Key::Left => {
                             if e.is_down() {
-                                player.velocity.x = -vx / FPS;
+                                moving_left = true;
                             } else {
-                                player.velocity.x = 0.0;
+                                moving_left = false;
                             }
                         },
                         Key::Up => {
@@ -681,6 +718,21 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
                 },
                 _ => (),
             }
+        }
+        let vx = if input.key_down(Key::LShift) {
+            92.0
+        } else {
+            46.0
+        };
+        if moving_right {
+            let player = scene.sprites.get_mut(&player_id).unwrap();
+            player.velocity.x = vx / FPS;
+        } else if moving_left {
+            let player = scene.sprites.get_mut(&player_id).unwrap();
+            player.velocity.x = -vx / FPS;
+        } else {
+            let player = scene.sprites.get_mut(&player_id).unwrap();
+            player.velocity.x = 0.0;
         }
         while update_timer.tick() {
             scene.step_physics();
