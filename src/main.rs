@@ -10,7 +10,7 @@ use quicksilver::{
     Timer,
 };
 
-const SPRITES:&[u8] = include_bytes!("../static/colored_transparent_packed.png");
+const SPRITES:&[u8] = include_bytes!("../static/monochrome_transparent_packed.png");
 const SPRITES_WIDTH:usize = 768;
 const SPRITES_HEIGHT:usize = 352;
 const SPRITE_WIDTH:usize = 16;
