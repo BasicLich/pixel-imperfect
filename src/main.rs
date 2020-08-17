@@ -31,7 +31,7 @@ fn main() {
     );
 }
 
-fn extract_sprite(gfx: &Graphics, src: &image::DynamicImage, x: usize, y: usize) -> (Image, [bool; SPRITE_WIDTH*SPRITE_WIDTH]) {
+fn extract_sprite(src: &image::DynamicImage, x: usize, y: usize) -> [bool; SPRITE_WIDTH*SPRITE_WIDTH] {
     let mut pixels = vec![0; SPRITE_WIDTH*SPRITE_WIDTH*4];
     let mut collider = [false; SPRITE_WIDTH*SPRITE_WIDTH];
     let x = x * SPRITE_WIDTH;
@@ -49,19 +49,10 @@ fn extract_sprite(gfx: &Graphics, src: &image::DynamicImage, x: usize, y: usize)
             }
         }
     }
-    let mut image = Image::from_raw(
-        gfx,
-        Some(&pixels),
-        SPRITE_WIDTH as u32,
-        SPRITE_WIDTH as u32,
-        PixelFormat::RGBA,
-    ).unwrap();
-    image.set_magnification(golem::TextureFilter::Nearest).unwrap();
-    (image, collider)
+    collider
 }
 
 struct Sprite {
-    image: Image,
     collider: [bool; SPRITE_WIDTH*SPRITE_WIDTH],
     loc: Vector,
     scale: u32,
@@ -73,10 +64,13 @@ struct Sprite {
 }
 
 impl Sprite {
-    fn new(gfx: &Graphics, src: &image::DynamicImage, x: usize, y: usize, xx: f32, yy: f32, scale: u32, color: Color) -> Self {
-        let (image, collider) = extract_sprite(gfx, src, x, y);
+    fn new(src: &image::DynamicImage, x: usize, y: usize, xx: f32, yy: f32, scale: u32, color: Color) -> Self {
+        let collider = extract_sprite(src, x, y);
+        Sprite::from_collider(collider, xx, yy, scale, color)
+    }
+
+    fn from_collider(collider: [bool; SPRITE_WIDTH*SPRITE_WIDTH], xx: f32, yy: f32, scale: u32, color: Color) -> Self {
         Self {
-            image,
             collider,
             loc: Vector::new(xx as f32, yy as f32),
             scale,
@@ -339,6 +333,7 @@ struct Scene {
     sprites: IndexMap<usize, Sprite>,
     potions: Vec<(usize, i32)>,
     characters: Vec<usize>,
+    particles: Vec<usize>,
     collision_map: CollisionTree,
     next_id: usize,
     tile_cache: IndexMap<(i32, i32), Image>,
@@ -362,6 +357,7 @@ impl Scene {
             sprites: IndexMap::new(),
             potions: vec![],
             characters: vec![],
+            particles: vec![],
             collision_map: CollisionTree::new(0, 0, 2000, 1000),
             next_id: 0,
             tile_cache: IndexMap::new(),
@@ -381,6 +377,12 @@ impl Scene {
         id
     }
 
+    fn add_particle(&mut self, sprite: Sprite) -> usize {
+        let id = self.add_sprite(sprite);
+        self.particles.push(id);
+        id
+    }
+
     fn add_character(&mut self, sprite: Sprite) -> usize {
         let id = self.add_sprite(sprite);
         self.characters.push(id);
@@ -395,46 +397,84 @@ impl Scene {
 
     fn step_physics(&mut self) {
         for sprite in self.sprites.values_mut() {
-            sprite.velocity.y += 0.4 / FPS;
-            sprite.loc.x += sprite.velocity.x * sprite.scale as f32;
-            let mut blocked = false;
+            sprite.velocity.y += 3.4 / FPS;
+            let mut blocked_x = false;
+            let mut blocked_y = false;
             let mut blocked_by_ground = false;
-            let mut vy = sprite.velocity.y * sprite.scale as f32;
-            let mut loc_y = sprite.loc.y;
+            for (mut vx, mut vy) in vec![(0, (sprite.velocity.y * sprite.scale as f32) as i32), ((sprite.velocity.x * sprite.scale as f32) as i32, 0)] {
+                if vy != 0 && sprite.velocity.y < 0.0 {
+                    sprite.loc.y += vy as f32;
+                } else {
+                    let mut loc_x = sprite.loc.x;
+                    let mut loc_y = sprite.loc.y;
 
-            'outer: while vy.abs() >= 1.0 {
-                loc_y += 1.0f32.copysign(sprite.velocity.y);
-                vy -= 1.0f32.copysign(sprite.velocity.y);
-                for dx in 0..SPRITE_WIDTH {
-                    for dy in 0..SPRITE_WIDTH {
-                        let i = dx + dy*SPRITE_WIDTH;
-                        if sprite.collider[i] {
-                            let x = sprite.loc.x as i32 + dx as i32 * sprite.scale as i32;
-                            let y = loc_y as i32 + dy as i32 * sprite.scale as i32;
-                            if self.collision_map.check_rect(x, y, sprite.scale, sprite.scale) {
-                                blocked = true;
-                                //if dy as f32 > SPRITE_WIDTH as f32 * 0.5 {
-                                    blocked_by_ground = true;
-                                //}
-                                break 'outer;
+                    'outer: while vy.abs() >= 1 || vx.abs() >= 1 {
+                        if vy.abs() >= 1 {
+                            loc_y += 1.0f32.copysign(sprite.velocity.y);
+                            vy -= vy.signum();
+                        } else {
+                            loc_x += 1.0f32.copysign(sprite.velocity.x);
+                            vx -= vx.signum();
+                        }
+                        for dx in 0..SPRITE_WIDTH {
+                            for dy in 0..SPRITE_WIDTH {
+                                let i = dx + dy*SPRITE_WIDTH;
+                                if sprite.collider[i] {
+                                    let x = loc_x as i32 + dx as i32 * sprite.scale as i32;
+                                    let y = loc_y as i32 + dy as i32 * sprite.scale as i32;
+                                    if self.collision_map.check_rect(x, y, sprite.scale, sprite.scale) {
+                                        if vx.abs() >= 1 {
+                                            blocked_x = true;
+                                        } else {
+                                            blocked_y = true;
+                                        }
+                                        break 'outer;
+                                    }
+                                }
+                            }
+                        }
+                        sprite.loc.x = loc_x;
+                        sprite.loc.y = loc_y;
+                    }
+                }
+            }
+            if !blocked_y {
+                if sprite.velocity.y.abs() >= 1.0 {
+                    sprite.ground_contact = false;
+                }
+            } else  {
+                if sprite.velocity.y > 0.0 {
+                    sprite.ground_contact = true;
+                    sprite.jumping = false;
+                }
+                sprite.velocity.y = 0.0;
+            }
+        }
+
+        let mut to_remove = IndexSet::new();
+        for particle_id in &self.particles {
+            let sprite = &self.sprites[particle_id];
+            if sprite.ground_contact {
+                to_remove.insert(*particle_id);
+                for x in 0..SPRITE_WIDTH {
+                    for y in 0..SPRITE_WIDTH {
+                        let i = x + y*SPRITE_WIDTH;
+                        if sprite.collider[i as usize] {
+                            for dx in 0..sprite.scale {
+                                for dy in 0..sprite.scale {
+                                    let x = sprite.loc.x as i32 + x as i32 * sprite.scale as i32 + dx as i32;
+                                    let y = sprite.loc.y as i32 + y as i32 * sprite.scale as i32 + dy as i32;
+                                    self.collision_map.insert(x ,y);
+                                    self.tile_cache.remove(&(x/ TILE_SIZE as i32, y / TILE_SIZE as i32));
+                                }
                             }
                         }
                     }
                 }
-                sprite.loc.y = loc_y;
-            }
-            if !blocked {
-                if sprite.velocity.y.abs() >= 1.0 {
-                    sprite.ground_contact = false;
-                }
-            } else if !sprite.ground_contact {
-                sprite.velocity.y = 0.0;
-                if blocked_by_ground {
-                    sprite.ground_contact = true;
-                    sprite.jumping = false;
-                }
             }
         }
+        self.particles.retain(|pid| !to_remove.contains(pid));
+        self.sprites.retain(|pid, _| !to_remove.contains(pid));
 
         let mut scale_changes = vec![];
         let mut consumed = IndexSet::new();
@@ -455,18 +495,27 @@ impl Scene {
             self.potions.retain(|(id, _)| *id != potion_id);
             self.sprites.remove(&potion_id);
         }
+        let mut new_sprites = vec![];
         for (sprite_id, delta) in scale_changes {
             let sprite = self.sprites.get_mut(&sprite_id).unwrap();
             sprite.scale = (sprite.scale as i32 + delta).max(1) as u32;
             sprite.loc.x -= SPRITE_WIDTH as f32 * delta as f32 * 0.5;
             sprite.loc.y -= SPRITE_WIDTH as f32 * delta as f32;
+            let cx = sprite.loc.x + SPRITE_WIDTH as f32 / 2.0;
+            let cy = sprite.loc.y + SPRITE_WIDTH as f32 / 2.0;
             for dx in 0..SPRITE_WIDTH {
-                for dy in 0..SPRITE_WIDTH {
+                for dy in 0..SPRITE_WIDTH-1 {
                     let i = dx + dy*SPRITE_WIDTH;
-                    if sprite.collider[i] {
+                    if true || sprite.collider[i] {
                         let x = sprite.loc.x as i32 + dx as i32 * sprite.scale as i32;
                         let y = sprite.loc.y as i32 + dy as i32 * sprite.scale as i32;
                         if self.collision_map.remove_rect(x, y, sprite.scale, sprite.scale).1 > 0 {
+                            let mut collider = [false; SPRITE_WIDTH*SPRITE_WIDTH];
+                            collider[0] = true;
+                            let mut new_sprite = Sprite::from_collider(collider, x as f32, y as f32, sprite.scale, Color::GREEN);
+                            let a = (cy-y as f32).atan2(cx - x as f32) - std::f32::consts::FRAC_PI_2;
+                            new_sprite.velocity = Vector::new(a.cos() * -20.0/FPS, a.sin() * -20.0/FPS);
+                            new_sprites.push(new_sprite);
                             for xx in 0..sprite.scale {
                                 for yy in 0..sprite.scale {
                                     let cx = sprite.loc.x as i32 + dx as i32 * sprite.scale as i32 + xx as i32;
@@ -474,10 +523,14 @@ impl Scene {
                                     self.tile_cache.remove(&(cx / TILE_SIZE as i32, cy / TILE_SIZE as i32));
                                 }
                             }
+
                         }
                     }
                 }
             }
+        }
+        for sprite in new_sprites {
+            self.add_particle(sprite);
         }
     }
 
@@ -556,20 +609,20 @@ impl Scene {
 async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> {
     let sprites = image::load(std::io::Cursor::new(SPRITES), image::ImageFormat::Png).unwrap();
     let mut scene = Scene::new();
-    let player_id = scene.add_character(Sprite::new(&gfx, &sprites, 31, 2, 300.0, 600.0, 7+6, Color::BLUE));
+    let player_id = scene.add_character(Sprite::new(&sprites, 31, 2, 300.0, 600.0, 7, Color::BLUE));
     for x in 0..10 {
-        scene.add_potion(Sprite::new(&gfx, &sprites, 33, 13, (x as f32 * 2.0) *100.0+3.0, 688.0, 2, Color::RED), 1);
+        scene.add_potion(Sprite::new(&sprites, 33, 13, (x as f32 * 2.0) *100.0+3.0, 688.0, 2, Color::RED), 1);
     }
     for x in 0..10 {
-        scene.add_potion(Sprite::new(&gfx, &sprites, 33, 13, (x as f32 * 2.0 + 1.0) *100.0, 688.0, 2, Color::BLUE), 1);
+        scene.add_potion(Sprite::new(&sprites, 33, 13, (x as f32 * 2.0 + 1.0) *100.0, 688.0, 2, Color::BLUE), 1);
     }
 
     for x in 0..20 {
-        scene.add_terrain(&Sprite::new(&gfx, &sprites, 7, 5, (x*(SPRITE_WIDTH-2)*7) as f32, 800.0, 7, Color::BLUE));
-        scene.add_terrain(&Sprite::new(&gfx, &sprites, 7, 5, (x*(SPRITE_WIDTH-2)*7) as f32, 900.0, 7, Color::BLUE));
+        scene.add_terrain(&Sprite::new(&sprites, 7, 5, (x*(SPRITE_WIDTH-2)*7) as f32, 800.0, 7, Color::BLUE));
+        scene.add_terrain(&Sprite::new(&sprites, 7, 5, (x*(SPRITE_WIDTH-2)*7) as f32, 900.0, 7, Color::BLUE));
     }
     for x in 0..20 {
-        scene.add_terrain(&Sprite::new(&gfx, &sprites, 20, 15, (x*SPRITE_WIDTH*7) as f32, 499.0, 7, Color::BLUE));
+        scene.add_terrain(&Sprite::new(&sprites, 20, 15, (x*SPRITE_WIDTH*7) as f32, 499.0, 7, Color::BLUE));
     }
 
     let mut update_timer = Timer::time_per_second(FPS);
