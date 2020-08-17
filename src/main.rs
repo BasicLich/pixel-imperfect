@@ -244,58 +244,43 @@ impl CollisionTree {
         }
         false
     }
-}
 
-struct CollisionMap {
-    scales: Vec<IndexMap<(i32, i32), u32>>,
-}
-
-impl CollisionMap {
-    fn new() -> Self {
-        Self {
-            scales: vec![IndexMap::new(); MAX_SCALE-1],
+    fn check_rect(&self, x: i32, y: i32, width: u32, height: u32) -> bool {
+        if x + width as i32 <= self.x || x > self.x + self.width as i32 || y + height as i32 <= self.y || y > self.y + self.height as i32 {
+            return false;
         }
-    }
-
-    fn add_sprite(&mut self, sprite: &Sprite) {
-        for x in 0..SPRITE_WIDTH {
-            for y in 0..SPRITE_WIDTH {
-                let i = x + y * SPRITE_WIDTH;
-                if sprite.collider[i] {
-                    let rx = x as i32 * sprite.scale as i32 + sprite.loc.x as i32;
-                    let ry = y as i32 * sprite.scale as i32 + sprite.loc.y as i32;
-                    for scale in 1..MAX_SCALE {
-                        if scale < sprite.scale as usize {
-                            for dx in 0..(sprite.scale as f32 / scale as f32).ceil() as i32{
-                                for dy in 0..(sprite.scale as f32 / scale as f32).ceil() as i32 {
-                                    let lx = rx / scale as i32 + dx as i32;
-                                    let ly = ry / scale as i32 + dy as i32;
-                                    *self.scales[scale-1].entry((lx, ly)).or_insert(0) += 1;
-                                }
-                            }
-                        } else {
-                            let lx = rx / scale as i32;
-                            let ly = ry / scale as i32;
-                            *self.scales[scale-1].entry((lx, ly)).or_insert(0) += 1;
-                        }
+        if self.free_pixels == 0 {
+            return true;
+        }
+        if x <= self.x && x + width as i32 > self.x+self.width as i32 && y <= self.y && y + height as i32 > self.y+self.height as i32 {
+            if self.free_pixels < self.width * self.height {
+                return true;
+            }
+        }
+        if let Some(grid) = &self.grid {
+            for x in self.x.max(x)..(self.x+self.width as i32).min(x+width as i32) {
+                for y in self.y.max(y)..(self.y+self.height as i32).min(y+height as i32) {
+                    let x = x - self.x;
+                    let y = y - self.y;
+                    let i = (x + y * self.width as i32) as usize;
+                    if grid[i] {
+                        return true;
+                    }
+                }
+            }
+        } else {
+            if let Some(children) = &self.children {
+                for child in children {
+                    if child.check_rect(x, y, width, height) {
+                        return true;
                     }
                 }
             }
         }
-    }
-
-    fn check_point(&self, x: i32, y: i32) -> bool {
-        for (scale, data) in self.scales.iter().enumerate().rev() {
-            let scale = scale + 1;
-            let lx = x / scale as i32;
-            let ly = y / scale as i32;
-            if data.get(&(lx, ly)).unwrap_or(&0) == &0 {
-                return false
-            }
-        }
-        true
+        false
     }
 }
+
 
 struct Scene {
     sprites: IndexMap<usize, Sprite>,
@@ -371,16 +356,12 @@ impl Scene {
                         if sprite.collider[i] {
                             let x = sprite.loc.x as i32 + dx as i32 * sprite.scale as i32;
                             let y = loc_y as i32 + dy as i32 * sprite.scale as i32;
-                            for xx in 0..sprite.scale as i32 {
-                                for yy in 0..sprite.scale as i32 {
-                                    if self.collision_map.check_point(x + xx, y + yy) {
-                                        blocked = true;
-                                        //if dy as f32 > SPRITE_WIDTH as f32 * 0.5 {
-                                            blocked_by_ground = true;
-                                        //}
-                                        break 'outer;
-                                    }
-                                }
+                            if self.collision_map.check_rect(x, y, sprite.scale, sprite.scale) {
+                                blocked = true;
+                                //if dy as f32 > SPRITE_WIDTH as f32 * 0.5 {
+                                    blocked_by_ground = true;
+                                //}
+                                break 'outer;
                             }
                         }
                     }
@@ -391,7 +372,7 @@ impl Scene {
                 if sprite.velocity.y.abs() >= 1.0 {
                     sprite.ground_contact = false;
                 }
-            } else {//if !sprite.ground_contact {
+            } else if !sprite.ground_contact {
                 sprite.velocity.y = 0.0;
                 if blocked_by_ground {
                     sprite.ground_contact = true;
@@ -493,11 +474,9 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
     for x in 0..20 {
         scene.add_terrain(&Sprite::new(&gfx, &sprites, 7, 5, (x*(SPRITE_WIDTH-2)*7) as f32, 800.0, 7, Color::BLUE));
     }
-    /*
     for x in 0..20 {
-        scene.add_terrain(&Sprite::new(&gfx, &sprites, 20, 15, (x*SPRITE_WIDTH*7) as f32, 590.0, 7, Color::BLUE));
+        scene.add_terrain(&Sprite::new(&gfx, &sprites, 20, 15, (x*SPRITE_WIDTH*7) as f32, 500.0, 7, Color::BLUE));
     }
-    */
 
     let mut update_timer = Timer::time_per_second(FPS);
     let mut draw_timer = Timer::time_per_second(FPS);
