@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use indexmap::{IndexMap, IndexSet};
 
 use image::GenericImageView;
 
@@ -15,6 +15,7 @@ const SPRITES_WIDTH:usize = 768;
 const SPRITES_HEIGHT:usize = 352;
 const SPRITE_WIDTH:usize = 16;
 const PIXEL_CHUNK: u32 = 4;
+const MAX_SCALE: usize = 8;
 
 const FPS: f32 = 60.0;
 
@@ -110,11 +111,197 @@ impl Sprite {
     }
 }
 
+const LEAF_SIZE: usize = 4;
+struct CollisionTree {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    free_pixels: u32,
+    children: Option<Vec<CollisionTree>>,
+    grid: Option<[bool; LEAF_SIZE*LEAF_SIZE]>,
+}
+
+impl CollisionTree {
+    fn new(x: i32, y: i32, width: u32, height: u32) -> Self {
+        let width = ((width as f32 / 4.0).ceil() * 4.0) as u32;
+        let height = ((height as f32 / 4.0).ceil() * 4.0) as u32;
+        Self {
+            x,
+            y,
+            width,
+            height,
+            free_pixels: width * height,
+            children: None,
+            grid: None,
+        }
+    }
+
+    fn insert(&mut self, x: i32, y: i32) -> std::result::Result<bool, ()> {
+        if x < self.x || x >= self.x+self.width as i32 || y < self.y || y >= self.y+self.height as i32 {
+            return Err(());
+        }
+        if self.free_pixels == 0 {
+            return Ok(false);
+        } else {
+            if let Some(children) = &mut self.children {
+                for child in children {
+                    if x >= child.x && x < child.x+child.width as i32 && y >= child.y && y < child.y + child.height as i32 {
+                        let e = child.insert(x, y);
+                        if let Ok(true) = &e {
+                            self.free_pixels -= 1;
+                        }
+                        return e;
+                    }
+                }
+            } else {
+                if self.width * self.height > (LEAF_SIZE*LEAF_SIZE) as u32 {
+                    self.children = Some(vec![
+                        CollisionTree::new(self.x, self.y, self.width / 2, self.height / 2),
+                        CollisionTree::new(self.x + self.width as i32 / 2, self.y, self.width / 2, self.height / 2),
+                        CollisionTree::new(self.x + self.width as i32 / 2, self.y + self.height as i32  / 2, self.width / 2, self.height / 2),
+                        CollisionTree::new(self.x, self.y + self.height as i32 / 2, self.width / 2, self.width / 2),
+                    ]);
+                    if let Some(grid) = self.grid.take() {
+                        for (i, v) in grid.iter().enumerate() {
+                            if *v {
+                                let lx = i as i32 % LEAF_SIZE as i32;
+                                let ly = i as i32 / LEAF_SIZE as i32;
+                                for child in self.children.as_mut().unwrap() {
+                                    if x + lx >= child.x && x + lx < child.x+child.width as i32 && y  + ly >= child.y && y + ly < child.y + child.height as i32 {
+                                        child.insert(x + lx, y + ly);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    for child in self.children.as_mut().unwrap().iter_mut() {
+                        if x >= child.x && x < child.x+child.width as i32 && y >= child.y && y < child.y + child.height as i32 {
+                            let e = child.insert(x, y);
+                            if let Ok(true) = &e {
+                                self.free_pixels -= 1;
+                            }
+                            return e;
+                        }
+                    }
+                } else {
+                    if self.grid.is_none() {
+                        self.grid.replace([false; LEAF_SIZE*LEAF_SIZE]);
+                    }
+                    let i = ((x - self.x) + (y - self.y) * self.width as i32) as usize;
+                    let p = &mut self.grid.as_mut().unwrap()[i];
+                    if !*p {
+                        *p = true;
+                        self.free_pixels -= 1;
+                        return Ok(true);
+                    } else {
+                        return Ok(false);
+                    }
+                }
+            }
+        }
+        unreachable!();
+    }
+
+    fn add_sprite(&mut self, sprite: &Sprite) {
+        for x in 0..SPRITE_WIDTH {
+            for y in 0..SPRITE_WIDTH {
+                let i = x + y * SPRITE_WIDTH;
+                if sprite.collider[i] {
+                    let rx = x as i32 * sprite.scale as i32 + sprite.loc.x as i32;
+                    let ry = y as i32 * sprite.scale as i32 + sprite.loc.y as i32;
+                    for dx in 0..sprite.scale as i32 {
+                        for dy in 0..sprite.scale as i32 {
+                            self.insert(rx + dx, ry + dy);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn check_point(&self, x: i32, y: i32) -> bool {
+        if x < self.x || x >= self.x+self.width as i32 || y < self.y || y >= self.y+self.height as i32 {
+            return false;
+        }
+        if self.free_pixels == 0 {
+            return true;
+        }
+        if let Some(grid) = &self.grid {
+            let x = x - self.x;
+            let y = y - self.y;
+            let i = (x + y * self.width as i32) as usize;
+            return grid[i];
+        } else {
+            if let Some(children) = &self.children {
+                for child in children {
+                    if child.check_point(x, y) {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+}
+
+struct CollisionMap {
+    scales: Vec<IndexMap<(i32, i32), u32>>,
+}
+
+impl CollisionMap {
+    fn new() -> Self {
+        Self {
+            scales: vec![IndexMap::new(); MAX_SCALE-1],
+        }
+    }
+
+    fn add_sprite(&mut self, sprite: &Sprite) {
+        for x in 0..SPRITE_WIDTH {
+            for y in 0..SPRITE_WIDTH {
+                let i = x + y * SPRITE_WIDTH;
+                if sprite.collider[i] {
+                    let rx = x as i32 * sprite.scale as i32 + sprite.loc.x as i32;
+                    let ry = y as i32 * sprite.scale as i32 + sprite.loc.y as i32;
+                    for scale in 1..MAX_SCALE {
+                        if scale < sprite.scale as usize {
+                            for dx in 0..(sprite.scale as f32 / scale as f32).ceil() as i32{
+                                for dy in 0..(sprite.scale as f32 / scale as f32).ceil() as i32 {
+                                    let lx = rx / scale as i32 + dx as i32;
+                                    let ly = ry / scale as i32 + dy as i32;
+                                    *self.scales[scale-1].entry((lx, ly)).or_insert(0) += 1;
+                                }
+                            }
+                        } else {
+                            let lx = rx / scale as i32;
+                            let ly = ry / scale as i32;
+                            *self.scales[scale-1].entry((lx, ly)).or_insert(0) += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn check_point(&self, x: i32, y: i32) -> bool {
+        for (scale, data) in self.scales.iter().enumerate().rev() {
+            let scale = scale + 1;
+            let lx = x / scale as i32;
+            let ly = y / scale as i32;
+            if data.get(&(lx, ly)).unwrap_or(&0) == &0 {
+                return false
+            }
+        }
+        true
+    }
+}
+
 struct Scene {
-    sprites: HashMap<usize, Sprite>,
+    sprites: IndexMap<usize, Sprite>,
     potions: Vec<(usize, i32)>,
     characters: Vec<usize>,
-    terrain_grids: HashMap<u32, HashMap<(i32, i32), bool>>,
+    collision_map: CollisionTree,
     next_id: usize,
 }
 
@@ -133,10 +320,10 @@ fn from_scale(x: i32, y: i32, scale: u32) -> (i32, i32) {
 impl Scene {
     fn new() -> Self {
         Self {
-            sprites: HashMap::new(),
-            terrain_grids: HashMap::new(),
+            sprites: IndexMap::new(),
             potions: vec![],
             characters: vec![],
+            collision_map: CollisionTree::new(0, 0, 2000, 1000),
             next_id: 0,
         }
     }
@@ -163,14 +350,7 @@ impl Scene {
     fn add_terrain(&mut self, sprite: &Sprite) {
         let x = sprite.loc.x as i32 / sprite.scale as i32;
         let y = sprite.loc.y as i32 / sprite.scale as i32;
-        let grid = self.terrain_grids.entry(sprite.scale).or_insert_with(|| HashMap::new());
-        for dx in 0..SPRITE_WIDTH {
-            for dy in 0..SPRITE_WIDTH {
-                if sprite.collider[dx + dy*SPRITE_WIDTH] {
-                    grid.insert((x+dx as i32, y+dy as i32), true);
-                }
-            }
-        }
+        self.collision_map.add_sprite(sprite);
     }
 
     fn step_physics(&mut self) {
@@ -178,25 +358,27 @@ impl Scene {
             sprite.velocity.y += 3.4 / FPS;
             sprite.loc.x += sprite.velocity.x * sprite.scale as f32;
             let mut blocked = false;
+            let mut blocked_by_ground = false;
             let mut vy = sprite.velocity.y * sprite.scale as f32;
             let mut loc_y = sprite.loc.y;
+
             'outer: while vy.abs() >= 1.0 {
                 loc_y += 1.0f32.copysign(sprite.velocity.y);
                 vy -= 1.0f32.copysign(sprite.velocity.y);
-                for x in 0..SPRITE_WIDTH {
-                    for y in 0..SPRITE_WIDTH {
-                        if sprite.collider[x as usize + y as usize * SPRITE_WIDTH as usize] {
-                            for (scale, grid) in &self.terrain_grids {
-                                for ddx in 0..sprite.scale {
-                                    for ddy in 0..sprite.scale {
-                                        let (dx, dy) = from_scale(x as i32, y as i32, sprite.scale);
-                                        let x = sprite.loc.x as i32 + dx + ddx as i32;
-                                        let y = loc_y as i32 + dy + ddy as i32;
-                                        let (x, y) = to_scale(x , y, *scale);
-                                        if let Some(true) = grid.get(&(x, y)) {
-                                            blocked = true;
-                                            break 'outer;
-                                        }
+                for dx in 0..SPRITE_WIDTH {
+                    for dy in 0..SPRITE_WIDTH {
+                        let i = dx + dy*SPRITE_WIDTH;
+                        if sprite.collider[i] {
+                            let x = sprite.loc.x as i32 + dx as i32 * sprite.scale as i32;
+                            let y = loc_y as i32 + dy as i32 * sprite.scale as i32;
+                            for xx in 0..sprite.scale as i32 {
+                                for yy in 0..sprite.scale as i32 {
+                                    if self.collision_map.check_point(x + xx, y + yy) {
+                                        blocked = true;
+                                        //if dy as f32 > SPRITE_WIDTH as f32 * 0.5 {
+                                            blocked_by_ground = true;
+                                        //}
+                                        break 'outer;
                                     }
                                 }
                             }
@@ -209,15 +391,17 @@ impl Scene {
                 if sprite.velocity.y.abs() >= 1.0 {
                     sprite.ground_contact = false;
                 }
-            } else if !sprite.ground_contact {
+            } else {//if !sprite.ground_contact {
                 sprite.velocity.y = 0.0;
-                sprite.ground_contact = true;
-                sprite.jumping = false;
+                if blocked_by_ground {
+                    sprite.ground_contact = true;
+                    sprite.jumping = false;
+                }
             }
         }
 
         let mut scale_changes = vec![];
-        let mut consumed = HashSet::new();
+        let mut consumed = IndexSet::new();
         for character_id in &self.characters {
             let character = &self.sprites[character_id];
             for (potion_id, delta) in &self.potions {
@@ -240,29 +424,6 @@ impl Scene {
             character.scale = (character.scale as i32 + delta).max(1) as u32;
             character.loc.x -= SPRITE_WIDTH as f32 * delta as f32 * 0.5;
             character.loc.y -= SPRITE_WIDTH as f32 * delta as f32;
-            let mut collisions = vec![];
-            for x in 0..SPRITE_WIDTH {
-                for y in 0..SPRITE_WIDTH {
-                    if character.collider[x as usize + y as usize * SPRITE_WIDTH as usize] {
-                        for (scale, grid) in &self.terrain_grids {
-                            for ddx in 0..character.scale {
-                                for ddy in 0..character.scale {
-                                    let (dx, dy) = from_scale(x as i32, y as i32, character.scale);
-                                    let x = character.loc.x as i32 + dx + ddx as i32;
-                                    let y = character.loc.y as i32 + dy - ddy as i32;
-                                    let (x, y) = to_scale(x, y, *scale);
-                                    if let Some(true) = grid.get(&(x, y)) {
-                                        collisions.push((*scale, (x, y)));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            for (scale, (x,y)) in collisions {
-                self.terrain_grids.get_mut(&scale).unwrap().remove(&(x,y));
-            }
         }
     }
 
@@ -292,23 +453,13 @@ impl Scene {
                 }
             }
         }
-        for (scale, grid) in &self.terrain_grids {
-            for xx in x/ *scale as i32..(x+width as i32) / *scale as i32 {
-                for yy in y/ *scale as i32..(y+height as i32)/ *scale as i32 {
-                    if let Some(true) = grid.get(&(xx as i32, yy as i32)) {
-                        for dx in 0..*scale as usize {
-                            for dy in 0..*scale as usize {
-                                let lx = xx * *scale as i32 - x + dx as i32;
-                                let ly = yy * *scale as i32 - y + dy as i32;
-                                if lx >= 0 && lx < width as i32 && ly >= 0 && ly < height as i32 {
-                                    let i = (lx + ly * width as i32) as usize * 3;
-                                    pixels[i] = 0x00;
-                                    pixels[i+1] = 0xff;
-                                    pixels[i+2] = 0x00;
-                                }
-                            }
-                        }
-                    }
+        for xx in x..x+width as i32 {
+            for yy in y..y+height as i32 {
+                if self.collision_map.check_point(xx, yy) {
+                    let i = (xx - x + (yy-y)* width as i32) as usize * 3;
+                    pixels[i] = 0x00;
+                    pixels[i+1] = 0xff;
+                    pixels[i+2] = 0x00;
                 }
             }
         }
@@ -331,20 +482,22 @@ impl Scene {
 async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> {
     let sprites = image::load(std::io::Cursor::new(SPRITES), image::ImageFormat::Png).unwrap();
     let mut scene = Scene::new();
-    let player_id = scene.add_character(Sprite::new(&gfx, &sprites, 31, 2, 300.0, 688.0, 7, Color::BLUE));
+    let player_id = scene.add_character(Sprite::new(&gfx, &sprites, 31, 2, 300.0, 600.0, 7, Color::BLUE));
     for x in 0..10 {
         scene.add_potion(Sprite::new(&gfx, &sprites, 33, 13, (x as f32 * 2.0) *100.0, 688.0, 2, Color::RED), 1);
     }
     for x in 0..10 {
-        scene.add_potion(Sprite::new(&gfx, &sprites, 33, 13, (x as f32 * 2.0 + 1.0) *100.0, 688.0, 2, Color::BLUE), -1);
+        scene.add_potion(Sprite::new(&gfx, &sprites, 33, 13, (x as f32 * 2.0 + 1.0) *100.0, 688.0, 2, Color::BLUE), 1);
     }
 
     for x in 0..20 {
         scene.add_terrain(&Sprite::new(&gfx, &sprites, 7, 5, (x*(SPRITE_WIDTH-2)*7) as f32, 800.0, 7, Color::BLUE));
     }
-    for x in 0..100 {
+    /*
+    for x in 0..20 {
         scene.add_terrain(&Sprite::new(&gfx, &sprites, 20, 15, (x*SPRITE_WIDTH*7) as f32, 590.0, 7, Color::BLUE));
     }
+    */
 
     let mut update_timer = Timer::time_per_second(FPS);
     let mut draw_timer = Timer::time_per_second(FPS);
@@ -383,7 +536,8 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
                             } else {
                                 if !player.ground_contact && player.jumping {
                                     player.velocity.y = player.velocity.y.max(-2.0);
-                                }
+                                } 
+
                             }
                         },
                         Key::A => {
@@ -407,8 +561,8 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
         }
         if draw_timer.exhaust().is_some() {
             let player = scene.sprites.get_mut(&player_id).unwrap();
-            camera.x = player.loc.x - 1920.0/2.0;
-            camera.y = player.loc.y - 1080.0/2.0;
+            camera.x = camera.x * 0.9 + (player.loc.x - 1920.0/2.0)*0.1;
+            camera.y = camera.y * 0.9 + (player.loc.y - 1080.0/2.0) *0.1;
             gfx.clear(Color::WHITE);
             let scale = player.scale as f32 / 8.0;
             scene.draw(&mut gfx, camera.x as i32, camera.y as i32, 1920, 1080, scale);
