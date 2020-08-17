@@ -111,7 +111,7 @@ impl Sprite {
     }
 }
 
-const LEAF_SIZE: usize = 4;
+const LEAF_SIZE: usize = 128;
 struct CollisionTree {
     x: i32,
     y: i32,
@@ -281,6 +281,7 @@ impl CollisionTree {
     }
 }
 
+const TILE_SIZE: u32 = 100;
 
 struct Scene {
     sprites: IndexMap<usize, Sprite>,
@@ -288,6 +289,7 @@ struct Scene {
     characters: Vec<usize>,
     collision_map: CollisionTree,
     next_id: usize,
+    tile_cache: IndexMap<(i32, i32), Image>,
 }
 
 fn to_scale(x: i32, y: i32, scale: u32) -> (i32, i32) {
@@ -310,6 +312,7 @@ impl Scene {
             characters: vec![],
             collision_map: CollisionTree::new(0, 0, 2000, 1000),
             next_id: 0,
+            tile_cache: IndexMap::new(),
         }
     }
 
@@ -408,7 +411,7 @@ impl Scene {
         }
     }
 
-    fn draw(&self, gfx: &mut Graphics, x: i32, y: i32, width: u32, height: u32, scale: f32) {
+    fn draw(&mut self, gfx: &mut Graphics, x: i32, y: i32, width: u32, height: u32, scale: f32) {
         let mut pixels = vec![0; width as usize * height as usize * 3];
         for sprite in self.sprites.values() {
             for dx in 0..SPRITE_WIDTH*sprite.scale as usize {
@@ -434,16 +437,6 @@ impl Scene {
                 }
             }
         }
-        for xx in x..x+width as i32 {
-            for yy in y..y+height as i32 {
-                if self.collision_map.check_point(xx, yy) {
-                    let i = (xx - x + (yy-y)* width as i32) as usize * 3;
-                    pixels[i] = 0x00;
-                    pixels[i+1] = 0xff;
-                    pixels[i+2] = 0x00;
-                }
-            }
-        }
 
 
         let mut image = Image::from_raw(
@@ -456,6 +449,36 @@ impl Scene {
         image.set_magnification(golem::TextureFilter::Nearest).unwrap();
         let region = Rectangle::new_sized(Vector::new(1920.0, 1080.0));
         gfx.draw_image(&image, region);
+
+        for xx in x/TILE_SIZE as i32 - 1..(x+width as i32)/TILE_SIZE as i32 + 1 {
+            for yy in y/TILE_SIZE as i32 - 1..(y+height as i32) / TILE_SIZE as i32 + 1 {
+                if !self.tile_cache.contains_key(&(xx, yy)) {
+                    let mut tile = vec![0; (TILE_SIZE*TILE_SIZE*4) as usize];
+                    for dx in 0..TILE_SIZE {
+                        for dy in 0..TILE_SIZE {
+                            if self.collision_map.check_point(xx * TILE_SIZE as i32+ dx as i32, yy * TILE_SIZE as i32 + dy as i32) {
+                                let i = (dx + dy * TILE_SIZE) as usize * 4;
+                                tile[i] = 0x00;
+                                tile[i+1] = 0xff;
+                                tile[i+2] = 0x00;
+                                tile[i+3] = 0xff;
+                            }
+                        }
+                    }
+                    let mut tile = Image::from_raw(
+                        gfx,
+                        Some(&tile),
+                        TILE_SIZE,
+                        TILE_SIZE,
+                        PixelFormat::RGBA,
+                    ).unwrap();
+                    tile.set_magnification(golem::TextureFilter::Nearest).unwrap();
+                    self.tile_cache.insert((xx, yy), tile);
+                }
+                let region = Rectangle::new(Vector::new((xx*TILE_SIZE as i32 - x) as f32, (yy*TILE_SIZE as i32 - y) as f32), Vector::new(TILE_SIZE as f32, TILE_SIZE as f32));
+                gfx.draw_image(self.tile_cache.get(&(xx, yy)).as_ref().unwrap(), region);
+            }
+        }
 
     }
 }
