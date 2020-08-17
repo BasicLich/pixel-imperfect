@@ -15,7 +15,7 @@ const SPRITES_WIDTH:usize = 768;
 const SPRITES_HEIGHT:usize = 352;
 const SPRITE_WIDTH:usize = 16;
 const PIXEL_CHUNK: u32 = 4;
-const MAX_SCALE: usize = 8;
+const MAX_SCALE: usize = 18;
 
 const FPS: f32 = 60.0;
 
@@ -111,7 +111,7 @@ impl Sprite {
     }
 }
 
-const LEAF_SIZE: usize = 128;
+const LEAF_SIZE: usize = 16;
 struct CollisionTree {
     x: i32,
     y: i32,
@@ -245,12 +245,64 @@ impl CollisionTree {
         false
     }
 
+    fn remove_rect(&mut self, x: i32, y: i32, width: u32, height: u32) -> (bool, u32) {
+        if x + width as i32 <= self.x || x > self.x + self.width as i32 || y + height as i32 <= self.y || y > self.y + self.height as i32 {
+            return (false, 0);
+        }
+        if x <= self.x && x + width as i32 > self.x+self.width as i32 && y <= self.y && y + height as i32 > self.y+self.height as i32 {
+            self.children.take();
+            self.grid.take();
+            return (true, self.width * self.height - self.free_pixels);
+        }
+        if let Some(grid) = &mut self.grid {
+            let mut removed = 0;
+            for x in self.x.max(x)..(self.x+self.width as i32).min(x+width as i32) {
+                for y in self.y.max(y)..(self.y+self.height as i32).min(y+height as i32) {
+                    let x = x - self.x;
+                    let y = y - self.y;
+                    let i = (x + y * self.width as i32) as usize;
+                    if grid[i] {
+                        self.free_pixels += 1;
+                        removed += 1;
+                        grid[i] = false;
+                    }
+                }
+            }
+            if self.free_pixels == self.width * self.height {
+                return (true, removed);
+            }
+            return (false, removed);
+        } else {
+            let mut keep = false;
+            let mut removed = 0;
+            if let Some(children) = &mut self.children {
+                for child in children {
+                    let (empty, child_removed) = child.remove_rect(x, y, width, height);
+                    removed += child_removed;
+                    if !empty {
+                        keep = true;
+                    } else {
+                    }
+                }
+            }
+            if !keep {
+                self.children.take();
+            }
+            self.free_pixels += removed;
+            return (!keep, removed);
+        }
+        (false, 0)
+    }
+
     fn check_rect(&self, x: i32, y: i32, width: u32, height: u32) -> bool {
         if x + width as i32 <= self.x || x > self.x + self.width as i32 || y + height as i32 <= self.y || y > self.y + self.height as i32 {
             return false;
         }
         if self.free_pixels == 0 {
             return true;
+        }
+        if self.free_pixels == self.width * self.height {
+            return false;
         }
         if x <= self.x && x + width as i32 > self.x+self.width as i32 && y <= self.y && y + height as i32 > self.y+self.height as i32 {
             if self.free_pixels < self.width * self.height {
@@ -343,7 +395,7 @@ impl Scene {
 
     fn step_physics(&mut self) {
         for sprite in self.sprites.values_mut() {
-            sprite.velocity.y += 3.4 / FPS;
+            sprite.velocity.y += 0.4 / FPS;
             sprite.loc.x += sprite.velocity.x * sprite.scale as f32;
             let mut blocked = false;
             let mut blocked_by_ground = false;
@@ -403,11 +455,29 @@ impl Scene {
             self.potions.retain(|(id, _)| *id != potion_id);
             self.sprites.remove(&potion_id);
         }
-        for (character_id, delta) in scale_changes {
-            let character = self.sprites.get_mut(&character_id).unwrap();
-            character.scale = (character.scale as i32 + delta).max(1) as u32;
-            character.loc.x -= SPRITE_WIDTH as f32 * delta as f32 * 0.5;
-            character.loc.y -= SPRITE_WIDTH as f32 * delta as f32;
+        for (sprite_id, delta) in scale_changes {
+            let sprite = self.sprites.get_mut(&sprite_id).unwrap();
+            sprite.scale = (sprite.scale as i32 + delta).max(1) as u32;
+            sprite.loc.x -= SPRITE_WIDTH as f32 * delta as f32 * 0.5;
+            sprite.loc.y -= SPRITE_WIDTH as f32 * delta as f32;
+            for dx in 0..SPRITE_WIDTH {
+                for dy in 0..SPRITE_WIDTH {
+                    let i = dx + dy*SPRITE_WIDTH;
+                    if sprite.collider[i] {
+                        let x = sprite.loc.x as i32 + dx as i32 * sprite.scale as i32;
+                        let y = sprite.loc.y as i32 + dy as i32 * sprite.scale as i32;
+                        if self.collision_map.remove_rect(x, y, sprite.scale, sprite.scale).1 > 0 {
+                            for xx in 0..sprite.scale {
+                                for yy in 0..sprite.scale {
+                                    let cx = sprite.loc.x as i32 + dx as i32 * sprite.scale as i32 + xx as i32;
+                                    let cy = sprite.loc.y as i32 + dy as i32 * sprite.scale as i32 + yy as i32;
+                                    self.tile_cache.remove(&(cx / TILE_SIZE as i32, cy / TILE_SIZE as i32));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -486,9 +556,9 @@ impl Scene {
 async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> {
     let sprites = image::load(std::io::Cursor::new(SPRITES), image::ImageFormat::Png).unwrap();
     let mut scene = Scene::new();
-    let player_id = scene.add_character(Sprite::new(&gfx, &sprites, 31, 2, 300.0, 600.0, 7, Color::BLUE));
+    let player_id = scene.add_character(Sprite::new(&gfx, &sprites, 31, 2, 300.0, 600.0, 7+6, Color::BLUE));
     for x in 0..10 {
-        scene.add_potion(Sprite::new(&gfx, &sprites, 33, 13, (x as f32 * 2.0) *100.0, 688.0, 2, Color::RED), 1);
+        scene.add_potion(Sprite::new(&gfx, &sprites, 33, 13, (x as f32 * 2.0) *100.0+3.0, 688.0, 2, Color::RED), 1);
     }
     for x in 0..10 {
         scene.add_potion(Sprite::new(&gfx, &sprites, 33, 13, (x as f32 * 2.0 + 1.0) *100.0, 688.0, 2, Color::BLUE), 1);
@@ -496,9 +566,10 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
 
     for x in 0..20 {
         scene.add_terrain(&Sprite::new(&gfx, &sprites, 7, 5, (x*(SPRITE_WIDTH-2)*7) as f32, 800.0, 7, Color::BLUE));
+        scene.add_terrain(&Sprite::new(&gfx, &sprites, 7, 5, (x*(SPRITE_WIDTH-2)*7) as f32, 900.0, 7, Color::BLUE));
     }
     for x in 0..20 {
-        scene.add_terrain(&Sprite::new(&gfx, &sprites, 20, 15, (x*SPRITE_WIDTH*7) as f32, 500.0, 7, Color::BLUE));
+        scene.add_terrain(&Sprite::new(&gfx, &sprites, 20, 15, (x*SPRITE_WIDTH*7) as f32, 499.0, 7, Color::BLUE));
     }
 
     let mut update_timer = Timer::time_per_second(FPS);
