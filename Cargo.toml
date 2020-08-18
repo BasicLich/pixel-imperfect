@@ -12,7 +12,8 @@ image = "0.23"
 golem = "0.1"
 vek = "0.12"
 indexmap = "1"
+tiled = "0.9"
 
 
 [profile.release]
-debug = true
+#debug = true

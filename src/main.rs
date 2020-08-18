@@ -11,6 +11,7 @@ use quicksilver::{
 };
 
 const SPRITES:&[u8] = include_bytes!("../static/monochrome_transparent_packed.png");
+const MAP:&[u8] = include_bytes!("../static/map.tmx");
 const SPRITES_WIDTH:usize = 768;
 const SPRITES_HEIGHT:usize = 352;
 const SPRITE_WIDTH:usize = 16;
@@ -408,6 +409,7 @@ impl Scene {
             let mut blocked_x = false;
             let mut blocked_y = false;
             let mut blocked_by_ground = false;
+            let falling = sprite.velocity.y > 0.0;
             for (mut vx, mut vy) in vec![(0, (sprite.velocity.y * sprite.scale as f32) as i32), ((sprite.velocity.x * sprite.scale as f32) as i32, 0)] {
                 if vy != 0 && sprite.velocity.y < 0.0 {
                     sprite.loc.y += vy as f32;
@@ -418,10 +420,8 @@ impl Scene {
                     'outer: while vy.abs() >= 1 || vx.abs() >= 1 {
                         if vy.abs() >= 1 {
                             loc_y += 1.0f32.copysign(sprite.velocity.y);
-                            vy -= vy.signum();
                         } else {
                             loc_x += 1.0f32.copysign(sprite.velocity.x);
-                            vx -= vx.signum();
                         }
                         for dx in 0..SPRITE_WIDTH {
                             for dy in 0..SPRITE_WIDTH {
@@ -440,6 +440,11 @@ impl Scene {
                                 }
                             }
                         }
+                        if vy.abs() >= 1 {
+                            vy -= vy.signum();
+                        } else {
+                            vx -= vx.signum();
+                        }
                         sprite.loc.x = loc_x;
                         sprite.loc.y = loc_y;
                     }
@@ -450,7 +455,7 @@ impl Scene {
                     sprite.ground_contact = false;
                 }
             } else  {
-                if sprite.velocity.y > 0.0 {
+                if falling {
                     sprite.ground_contact = true;
                     sprite.jumping = false;
                 }
@@ -551,7 +556,7 @@ impl Scene {
                                     let mut collider = [false; SPRITE_WIDTH*SPRITE_WIDTH];
                                     collider[0] = true;
                                     let mut new_sprite = Sprite::from_collider(collider, x as f32, y as f32, sprite.scale, Color::GREEN);
-                                    let a = (cy-y as f32).atan2(cx - x as f32);
+                                    let a = (cy-y as f32).atan2(cx - x as f32) + std::f32::consts::FRAC_PI_4;
                                     new_sprite.velocity = Vector::new(a.cos() * 100.0/FPS, a.sin() * 100.0/FPS);
                                     new_sprites.push(new_sprite);
                                     for xx in 0..sprite.scale {
@@ -648,21 +653,29 @@ impl Scene {
 
 async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> {
     let sprites = image::load(std::io::Cursor::new(SPRITES), image::ImageFormat::Png).unwrap();
+    let map = tiled::parse(MAP).unwrap();
     let mut scene = Scene::new();
-    let player_id = scene.add_character(Sprite::new(&sprites, 31, 2, 300.0, 600.0, 7, Color::BLUE));
-    for x in 0..10 {
-        scene.add_potion(Sprite::new(&sprites, 33, 13, (x as f32 * 2.0) *100.0+3.0, 688.0, 2, Color::RED), 1);
-    }
-    for x in 0..10 {
-        scene.add_potion(Sprite::new(&sprites, 33, 13, (x as f32 * 2.0 + 1.0) *100.0, 688.0, 2, Color::BLUE), 1);
-    }
+    let mut player_id = None;
+    for object in &map.object_groups[0].objects {
+        let ty = (object.gid - 1) / 48;
+        let tx = (object.gid - 1) - ty as u32 * 48;
 
-    for x in 0..20 {
-        scene.add_terrain(&Sprite::new(&sprites, 7, 5, (x*(SPRITE_WIDTH-2)*7) as f32, 800.0, 7, Color::BLUE));
-        scene.add_terrain(&Sprite::new(&sprites, 7, 5, (x*(SPRITE_WIDTH-2)*7) as f32, 900.0, 7, Color::BLUE));
+        if player_id.is_none() {
+            println!("{:?}", object);
+            player_id = Some(scene.add_character(Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y, 1, Color::BLUE)));
+        } else {
+            scene.add_potion(Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y, 1, Color::RED), 1);
+        }
     }
-    for x in 0..20 {
-        scene.add_terrain(&Sprite::new(&sprites, 20, 15, (x*SPRITE_WIDTH*7) as f32, 499.0, 7, Color::BLUE));
+    let player_id = player_id.unwrap();
+    for (y, row) in map.layers[0].tiles.iter().enumerate() {
+        for (x, tile) in row.iter().enumerate() {
+            if tile.gid != 0 {
+                let ty = (tile.gid - 1) / 48;
+                let tx = (tile.gid - 1) - ty as u32 * 48;
+                scene.add_terrain(&Sprite::new(&sprites, tx as usize, ty as usize, (x*SPRITE_WIDTH) as f32, (y*SPRITE_WIDTH) as f32, 1, Color::BLUE));
+            }
+        }
     }
 
     let mut update_timer = Timer::time_per_second(FPS);
@@ -694,7 +707,7 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
                             if e.is_down() {
                                 if player.ground_contact {
                                     player.jumping = true;
-                                    player.velocity.y = -68.0 / FPS;
+                                    player.velocity.y = (-68.0 / FPS) * (2.0/player.scale as f32).max(1.0);
                                 }
                             } else {
                                 if !player.ground_contact && player.jumping {
@@ -719,20 +732,21 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
                 _ => (),
             }
         }
-        let vx = if input.key_down(Key::LShift) {
-            92.0
-        } else {
-            46.0
-        };
-        if moving_right {
+
+        {
             let player = scene.sprites.get_mut(&player_id).unwrap();
-            player.velocity.x = vx / FPS;
-        } else if moving_left {
-            let player = scene.sprites.get_mut(&player_id).unwrap();
-            player.velocity.x = -vx / FPS;
-        } else {
-            let player = scene.sprites.get_mut(&player_id).unwrap();
-            player.velocity.x = 0.0;
+            let vx = if input.key_down(Key::LShift) {
+                92.0
+            } else {
+                46.0
+            } * (5.0/player.scale as f32).max(1.0);
+            if moving_right {
+                player.velocity.x = vx / FPS;
+            } else if moving_left {
+                player.velocity.x = -vx / FPS;
+            } else {
+                player.velocity.x = 0.0;
+            }
         }
         while update_timer.tick() {
             scene.step_physics();
