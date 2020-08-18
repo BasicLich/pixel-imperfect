@@ -580,7 +580,14 @@ impl Scene {
     }
 
     fn draw(&mut self, gfx: &mut Graphics, x: i32, y: i32, width: u32, height: u32, scale: f32) {
-        let mut pixels = vec![0; width as usize * height as usize * 3];
+        let pwidth = width;
+        let pheight = height;
+        let width = (width as f32 * scale) as u32;
+        let height = (height as f32 * scale) as u32;
+        let x = x - width as i32 / 2;
+        let y = y - height as i32 / 2;
+
+        let mut pixels = vec![0u8; pwidth as usize * pheight as usize * 3];
         for sprite in self.sprites.values() {
             for dx in 0..SPRITE_WIDTH*sprite.scale as usize {
                 let lx = dx / sprite.scale as usize;
@@ -595,15 +602,28 @@ impl Scene {
                     }
                     let ly = dy / sprite.scale as usize;
                     if sprite.collider[lx + ly*SPRITE_WIDTH] {
-                        let i = ((xx - x) as usize + (yy -y) as usize * width as usize)*3;
-                        if i < pixels.len() {
-                            pixels[i] = (sprite.color.r * 255.0) as u8;
-                            if let Some(t) = sprite.scale_timer {
-                                let red_shift = ((t * (10.0 + ((SCALE_CHANGE_TIMEOUT - t) / SCALE_CHANGE_TIMEOUT) * 20.0).sin() + 1.0) * 255.0) as u8;
-                                pixels[i] = (pixels[i] + red_shift).clamp(0, 255);
+                        let mut do_pixel = |i| {
+                            if i < pixels.len() {
+                                pixels[i] = (sprite.color.r * 255.0) as u8;
+                                if let Some(t) = sprite.scale_timer {
+                                    let red_shift: u8 = ((t * (10.0 + ((SCALE_CHANGE_TIMEOUT - t) / SCALE_CHANGE_TIMEOUT) * 20.0).sin() + 1.0) * 255.0) as u8;
+                                    pixels[i] = ((pixels[i] + red_shift) as u8).clamp(0, 255);
+                                }
+                                pixels[i+1] = (sprite.color.g * 255.0) as u8;
+                                pixels[i+2] = (sprite.color.b * 255.0) as u8;
                             }
-                            pixels[i+1] = (sprite.color.g * 255.0) as u8;
-                            pixels[i+2] = (sprite.color.b * 255.0) as u8;
+                        };
+                        if scale >= 1.0 {
+                            let i = ((xx - x) as usize / scale as usize + ((yy -y) as usize / scale as usize) * pwidth as usize)*3;
+                            do_pixel(i);
+                        } else {
+                            let s = (1.0/scale) as usize;
+                            for dx in 0..s {
+                                for dy in 0..s {
+                                    let i = ((xx - x) as usize * s as usize + dx + (((yy -y) as usize * s as usize) + dy) * pwidth as usize)*3;
+                                    do_pixel(i);
+                                }
+                            }
                         }
                     }
                 }
@@ -614,8 +634,8 @@ impl Scene {
         let mut image = Image::from_raw(
             gfx,
             Some(&pixels),
-            width,
-            height,
+            pwidth,
+            pheight,
             PixelFormat::RGB,
         ).unwrap();
         image.set_magnification(golem::TextureFilter::Nearest).unwrap();
@@ -647,7 +667,7 @@ impl Scene {
                     tile.set_magnification(golem::TextureFilter::Nearest).unwrap();
                     self.tile_cache.insert((xx, yy), tile);
                 }
-                let region = Rectangle::new(Vector::new((xx*TILE_SIZE as i32 - x) as f32, (yy*TILE_SIZE as i32 - y) as f32), Vector::new(TILE_SIZE as f32, TILE_SIZE as f32));
+                let region = Rectangle::new(Vector::new((xx*TILE_SIZE as i32 - x) as f32 / scale, (yy*TILE_SIZE as i32 - y) as f32 / scale), Vector::new(TILE_SIZE as f32 / scale, TILE_SIZE as f32 / scale));
                 gfx.draw_image(self.tile_cache.get(&(xx, yy)).as_ref().unwrap(), region);
             }
         }
@@ -671,7 +691,15 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
             if group.name == "player" {
                 player_id = Some(scene.add_character(Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, scale, Color::BLUE)));
             } else if group.name == "objects" {
-                scene.add_potion(Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, scale, Color::RED), 1);
+                let delta = if let Some(v) = object.properties.get("delta") {
+                    match v {
+                        tiled::PropertyValue::IntValue(v) => *v,
+                        _ => 1,
+                    }
+                } else {
+                    1
+                };
+                scene.add_potion(Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, scale, Color::RED), delta);
             } else if group.name == "terrain" {
                 scene.add_terrain(&Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, scale, Color::RED));
             }
@@ -682,6 +710,7 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
     let mut update_timer = Timer::time_per_second(FPS);
     let mut draw_timer = Timer::time_per_second(FPS);
     let mut camera = Vector::new(0.0, 0.0);
+    let mut camera_scale = 8.0;
     let mut moving_left = false;
     let mut moving_right = false;
     loop {
@@ -754,10 +783,14 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
         }
         if draw_timer.exhaust().is_some() {
             let player = scene.sprites.get_mut(&player_id).unwrap();
-            camera.x = camera.x * 0.9 + (player.loc.x - 1920.0/2.0)*0.1;
-            camera.y = camera.y * 0.9 + (player.loc.y - 1080.0/2.0) *0.1;
-            gfx.clear(Color::WHITE);
-            let scale = player.scale as f32 / 8.0;
+            camera.x = camera.x * 0.9 + (player.loc.x)*0.1;
+            camera.y = camera.y * 0.9 + (player.loc.y) *0.1;
+            camera_scale = camera_scale * 0.9 + player.scale as f32 * 0.1;
+            let scale = if camera_scale > 8.0 {
+                (camera_scale / 8.0).floor() as f32
+            } else {
+                1.0 / (8.0 / camera_scale).ceil() as f32
+            };
             scene.draw(&mut gfx, camera.x as i32, camera.y as i32, 1920, 1080, scale);
             gfx.present(&window)?;
         }
