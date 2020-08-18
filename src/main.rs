@@ -1,3 +1,4 @@
+#![feature(clamp)]
 use indexmap::{IndexMap, IndexSet};
 
 use image::GenericImageView;
@@ -11,7 +12,6 @@ use quicksilver::{
 };
 
 const SPRITES:&[u8] = include_bytes!("../static/monochrome_transparent_packed.png");
-const MAP:&[u8] = include_bytes!("../static/map.tmx");
 const SPRITES_WIDTH:usize = 768;
 const SPRITES_HEIGHT:usize = 352;
 const SPRITE_WIDTH:usize = 16;
@@ -598,6 +598,10 @@ impl Scene {
                         let i = ((xx - x) as usize + (yy -y) as usize * width as usize)*3;
                         if i < pixels.len() {
                             pixels[i] = (sprite.color.r * 255.0) as u8;
+                            if let Some(t) = sprite.scale_timer {
+                                let red_shift = ((t * (10.0 + ((SCALE_CHANGE_TIMEOUT - t) / SCALE_CHANGE_TIMEOUT) * 20.0).sin() + 1.0) * 255.0) as u8;
+                                pixels[i] = (pixels[i] + red_shift).clamp(0, 255);
+                            }
                             pixels[i+1] = (sprite.color.g * 255.0) as u8;
                             pixels[i+2] = (sprite.color.b * 255.0) as u8;
                         }
@@ -653,30 +657,27 @@ impl Scene {
 
 async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> {
     let sprites = image::load(std::io::Cursor::new(SPRITES), image::ImageFormat::Png).unwrap();
-    let map = tiled::parse(MAP).unwrap();
+    let map_data = quicksilver::load_file("map.tmx").await.expect("The file was not found!");
+    let map = tiled::parse(&*map_data).unwrap();
     let mut scene = Scene::new();
     let mut player_id = None;
-    for object in &map.object_groups[0].objects {
-        let ty = (object.gid - 1) / 48;
-        let tx = (object.gid - 1) - ty as u32 * 48;
+    for group in &map.object_groups {
+        for object in &group.objects {
+            let scale = (object.width / 16.0) as u32;
+            let ty = (object.gid - 1) / 48;
+            let tx = (object.gid - 1) - ty as u32 * 48;
 
-        if player_id.is_none() {
-            println!("{:?}", object);
-            player_id = Some(scene.add_character(Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y, 1, Color::BLUE)));
-        } else {
-            scene.add_potion(Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y, 1, Color::RED), 1);
-        }
-    }
-    let player_id = player_id.unwrap();
-    for (y, row) in map.layers[0].tiles.iter().enumerate() {
-        for (x, tile) in row.iter().enumerate() {
-            if tile.gid != 0 {
-                let ty = (tile.gid - 1) / 48;
-                let tx = (tile.gid - 1) - ty as u32 * 48;
-                scene.add_terrain(&Sprite::new(&sprites, tx as usize, ty as usize, (x*SPRITE_WIDTH) as f32, (y*SPRITE_WIDTH) as f32, 1, Color::BLUE));
+
+            if group.name == "player" {
+                player_id = Some(scene.add_character(Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, scale, Color::BLUE)));
+            } else if group.name == "objects" {
+                scene.add_potion(Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, scale, Color::RED), 1);
+            } else if group.name == "terrain" {
+                scene.add_terrain(&Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, scale, Color::RED));
             }
         }
     }
+    let player_id = player_id.unwrap();
 
     let mut update_timer = Timer::time_per_second(FPS);
     let mut draw_timer = Timer::time_per_second(FPS);
