@@ -58,7 +58,8 @@ struct Sprite {
     is_player: bool,
     collider: [bool; SPRITE_WIDTH*SPRITE_WIDTH],
     loc: Vector,
-    scale: u32,
+    x_scale: u32,
+    y_scale: u32,
     velocity: Vector,
     ground_contact: bool,
     jumping: bool,
@@ -70,17 +71,18 @@ struct Sprite {
 }
 
 impl Sprite {
-    fn new(src: &image::DynamicImage, x: usize, y: usize, xx: f32, yy: f32, scale: u32, color: Color) -> Self {
+    fn new(src: &image::DynamicImage, x: usize, y: usize, xx: f32, yy: f32, x_scale: u32, y_scale: u32, color: Color) -> Self {
         let collider = extract_sprite(src, x, y);
-        Sprite::from_collider(collider, xx, yy, scale, color)
+        Sprite::from_collider(collider, xx, yy, x_scale, y_scale, color)
     }
 
-    fn from_collider(collider: [bool; SPRITE_WIDTH*SPRITE_WIDTH], xx: f32, yy: f32, scale: u32, color: Color) -> Self {
+    fn from_collider(collider: [bool; SPRITE_WIDTH*SPRITE_WIDTH], xx: f32, yy: f32, x_scale: u32, y_scale: u32, color: Color) -> Self {
         Self {
             is_player: false,
             collider,
             loc: Vector::new(xx as f32, yy as f32),
-            scale,
+            x_scale,
+            y_scale,
             velocity: Vector::new(0.0, 0.0),
             ground_contact: false,
             jumping: false,
@@ -93,16 +95,16 @@ impl Sprite {
     }
 
     fn overlap(&self, other: &Sprite) -> bool {
-        let a = vek::geom::Rect::new(self.loc.x as i32, self.loc.y as i32, SPRITE_WIDTH as i32 * self.scale as i32, SPRITE_WIDTH as i32 * self.scale as i32);
-        let b = vek::geom::Rect::new(other.loc.x as i32, other.loc.y as i32, SPRITE_WIDTH as i32 * other.scale as i32, SPRITE_WIDTH as i32 * other.scale as i32);
+        let a = vek::geom::Rect::new(self.loc.x as i32, self.loc.y as i32, SPRITE_WIDTH as i32 * self.x_scale as i32, SPRITE_WIDTH as i32 * self.y_scale as i32);
+        let b = vek::geom::Rect::new(other.loc.x as i32, other.loc.y as i32, SPRITE_WIDTH as i32 * other.x_scale as i32, SPRITE_WIDTH as i32 * other.y_scale as i32);
         if a.collides_with_rect(b) {
             let c = a.intersection(b);
             for x in c.x..c.x+c.w {
                 for y in c.y..c.y+c.h {
-                    let (dx, dy) = to_scale(x as i32 - self.loc.x as i32, y as i32 - self.loc.y as i32, self.scale);
+                    let (dx, dy) = to_scale(x as i32 - self.loc.x as i32, y as i32 - self.loc.y as i32, self.x_scale, self.y_scale);
                     let ai = dx as usize + dy as usize * SPRITE_WIDTH;
                     if self.collider[ai] {
-                        let (dx, dy) = to_scale(x as i32 - other.loc.x as i32, y as i32 - other.loc.y as i32, other.scale);
+                        let (dx, dy) = to_scale(x as i32 - other.loc.x as i32, y as i32 - other.loc.y as i32, other.x_scale, other.y_scale);
                         let bi = dx as usize + dy as usize * SPRITE_WIDTH;
                         if other.collider[bi] {
                             return true
@@ -219,10 +221,10 @@ impl CollisionTree {
             for y in 0..SPRITE_WIDTH {
                 let i = x + y * SPRITE_WIDTH;
                 if sprite.collider[i] {
-                    let rx = x as i32 * sprite.scale as i32 + sprite.loc.x as i32;
-                    let ry = y as i32 * sprite.scale as i32 + sprite.loc.y as i32;
-                    for dx in 0..sprite.scale as i32 {
-                        for dy in 0..sprite.scale as i32 {
+                    let rx = x as i32 * sprite.x_scale as i32 + sprite.loc.x as i32;
+                    let ry = y as i32 * sprite.y_scale as i32 + sprite.loc.y as i32;
+                    for dx in 0..sprite.x_scale as i32 {
+                        for dy in 0..sprite.y_scale as i32 {
                             self.insert(rx + dx, ry + dy);
                         }
                     }
@@ -360,15 +362,15 @@ struct Scene {
     background_tile_cache: IndexMap<(i32, i32), Image>,
 }
 
-fn to_scale(x: i32, y: i32, scale: u32) -> (i32, i32) {
-    let x = x / scale as i32;
-    let y = y / scale as i32;
+fn to_scale(x: i32, y: i32, x_scale: u32, y_scale: u32) -> (i32, i32) {
+    let x = x / x_scale as i32;
+    let y = y / y_scale as i32;
     (x,y)
 }
 
-fn from_scale(x: i32, y: i32, scale: u32) -> (i32, i32) {
-    let x = x * scale as i32;
-    let y = y * scale as i32;
+fn from_scale(x: i32, y: i32, x_scale: u32, y_scale: u32) -> (i32, i32) {
+    let x = x * x_scale as i32;
+    let y = y * y_scale as i32;
     (x,y)
 }
 
@@ -429,33 +431,35 @@ impl Scene {
 
     fn step_physics(&mut self) {
         for sprite in self.sprites.values_mut() {
-            // Collision resolution
-            let mut x_dir = 0;
-            let mut y_dir = 0;
-            for dx in 0..SPRITE_WIDTH {
-                for dy in 0..SPRITE_WIDTH {
-                    let i = dx + dy*SPRITE_WIDTH;
-                    if sprite.collider[i] {
-                        let x = sprite.loc.x as i32 + dx as i32 * sprite.scale as i32;
-                        let y = sprite.loc.y as i32 + dy as i32 * sprite.scale as i32;
-                        if self.rubble_map.check_rect(x, y, sprite.scale, sprite.scale) {
-                        } else if self.collision_map.check_rect(x, y, sprite.scale, sprite.scale) {
-                            if dx <= SPRITE_WIDTH/2 {
-                                x_dir += 1;
-                            } else {
-                                x_dir -= 1;
-                            }
-                            if dy <= SPRITE_WIDTH/2 {
-                                y_dir += 1;
-                            } else {
-                                y_dir -= 1;
+            if sprite.is_player {
+                // Collision resolution
+                let mut x_dir = 0;
+                let mut y_dir = 0;
+                for dx in 0..SPRITE_WIDTH {
+                    for dy in 0..SPRITE_WIDTH {
+                        let i = dx + dy*SPRITE_WIDTH;
+                        if sprite.collider[i] {
+                            let x = sprite.loc.x as i32 + dx as i32 * sprite.x_scale as i32;
+                            let y = sprite.loc.y as i32 + dy as i32 * sprite.y_scale as i32;
+                            if self.rubble_map.check_rect(x, y, sprite.x_scale, sprite.y_scale) {
+                            } else if self.collision_map.check_rect(x, y, sprite.x_scale, sprite.y_scale) {
+                                if dx <= SPRITE_WIDTH/2 {
+                                    x_dir += 1;
+                                } else {
+                                    x_dir -= 1;
+                                }
+                                if dy <= SPRITE_WIDTH/2 {
+                                    y_dir += 1;
+                                } else {
+                                    y_dir -= 1;
+                                }
                             }
                         }
                     }
                 }
+                sprite.loc.x += (x_dir * sprite.x_scale as i32) as f32;
+                sprite.loc.y += (y_dir * sprite.y_scale as i32) as f32;
             }
-            sprite.loc.x += (x_dir * sprite.scale as i32) as f32;
-            sprite.loc.y += (y_dir * sprite.scale as i32) as f32;
 
             sprite.velocity.y += 3.4 / FPS;
             let mut blocked_x = false;
@@ -463,7 +467,7 @@ impl Scene {
             let mut blocked_by_ground = false;
             let mut in_rubble = false;
             let falling = sprite.velocity.y > 0.0;
-            for (mut vx, mut vy) in vec![(0, (sprite.velocity.y * sprite.scale as f32) as i32), ((sprite.velocity.x * sprite.scale as f32) as i32, 0)] {
+            for (mut vx, mut vy) in vec![(0, (sprite.velocity.y * sprite.y_scale as f32) as i32), ((sprite.velocity.x * sprite.x_scale as f32) as i32, 0)] {
                 {
                     let mut loc_x = sprite.loc.x;
                     let mut loc_y = sprite.loc.y;
@@ -478,11 +482,11 @@ impl Scene {
                             for dy in 0..SPRITE_WIDTH {
                                 let i = dx + dy*SPRITE_WIDTH;
                                 if sprite.collider[i] {
-                                    let x = loc_x as i32 + dx as i32 * sprite.scale as i32;
-                                    let y = loc_y as i32 + dy as i32 * sprite.scale as i32;
-                                    if self.rubble_map.check_rect(x, y, sprite.scale, sprite.scale) {
+                                    let x = loc_x as i32 + dx as i32 * sprite.x_scale as i32;
+                                    let y = loc_y as i32 + dy as i32 * sprite.y_scale as i32;
+                                    if self.rubble_map.check_rect(x, y, sprite.x_scale, sprite.y_scale) {
                                         in_rubble = true;
-                                    } else if self.collision_map.check_rect(x, y, sprite.scale, sprite.scale) {
+                                    } else if self.collision_map.check_rect(x, y, sprite.x_scale, sprite.y_scale) {
                                         if vx.abs() >= 1 {
                                             blocked_x = true;
                                         } else {
@@ -540,10 +544,10 @@ impl Scene {
                     for y in 0..SPRITE_WIDTH {
                         let i = x + y*SPRITE_WIDTH;
                         if sprite.collider[i as usize] {
-                            for dx in 0..sprite.scale {
-                                for dy in 0..sprite.scale {
-                                    let x = sprite.loc.x as i32 + x as i32 * sprite.scale as i32 + dx as i32;
-                                    let y = sprite.loc.y as i32 + y as i32 * sprite.scale as i32 + dy as i32;
+                            for dx in 0..sprite.x_scale {
+                                for dy in 0..sprite.y_scale {
+                                    let x = sprite.loc.x as i32 + x as i32 * sprite.x_scale as i32 + dx as i32;
+                                    let y = sprite.loc.y as i32 + y as i32 * sprite.y_scale as i32 + dy as i32;
                                     self.collision_map.insert(x ,y);
                                     self.rubble_map.insert(x, y);
                                     self.tile_cache.remove(&(x/ TILE_SIZE as i32, y / TILE_SIZE as i32));
@@ -598,28 +602,33 @@ impl Scene {
                 if delta == 0 {
                     continue
                 }
-                sprite.scale = (sprite.scale as i32 + delta).max(1) as u32;
-                sprite.loc.x -= SPRITE_WIDTH as f32 * delta as f32 * 0.5;
-                sprite.loc.y -= SPRITE_WIDTH as f32 * delta as f32;
+                let initial_width = SPRITE_WIDTH as u32 * sprite.x_scale;
+                let initial_height = SPRITE_WIDTH as u32 * sprite.y_scale;
+                sprite.x_scale = (sprite.x_scale as i32 + delta).max(1) as u32;
+                sprite.y_scale = (sprite.y_scale as i32 + delta).max(1) as u32;
+                sprite.loc.x -= (SPRITE_WIDTH as f32 * sprite.x_scale as f32 - initial_width as f32)/2.0;
+                sprite.loc.y -= SPRITE_WIDTH as f32 * sprite.y_scale as f32 - initial_height as f32;
+                //FIXME: Why is this offset necessary?
+                sprite.loc.y -= 8.0;
                 if delta > 0 {
                     let cx = sprite.loc.x + SPRITE_WIDTH as f32 / 2.0;
                     let cy = sprite.loc.y + SPRITE_WIDTH as f32 / 2.0;
                     for dx in 0..SPRITE_WIDTH {
                         for dy in -1..SPRITE_WIDTH as i32-1 {
                             if true {
-                                let x = sprite.loc.x as i32 + dx as i32 * sprite.scale as i32;
-                                let y = sprite.loc.y as i32 + dy as i32 * sprite.scale as i32;
-                                if self.collision_map.remove_rect(x, y, sprite.scale, sprite.scale).1 > 0 {
+                                let x = sprite.loc.x as i32 + dx as i32 * sprite.x_scale as i32;
+                                let y = sprite.loc.y as i32 + dy as i32 * sprite.y_scale as i32;
+                                if self.collision_map.remove_rect(x, y, sprite.x_scale, sprite.y_scale).1 > 0 {
                                     let mut collider = [false; SPRITE_WIDTH*SPRITE_WIDTH];
                                     collider[0] = true;
-                                    let mut new_sprite = Sprite::from_collider(collider, x as f32, y as f32, sprite.scale, Color::GREEN);
+                                    let mut new_sprite = Sprite::from_collider(collider, x as f32, y as f32, sprite.x_scale, sprite.y_scale, Color::GREEN);
                                     let a = (cy-y as f32).atan2(cx - x as f32) + std::f32::consts::FRAC_PI_4;
                                     new_sprite.velocity = Vector::new(a.cos() * 100.0/FPS, a.sin() * 100.0/FPS);
                                     new_sprites.push(new_sprite);
-                                    for xx in 0..sprite.scale {
-                                        for yy in 0..sprite.scale {
-                                            let cx = sprite.loc.x as i32 + dx as i32 * sprite.scale as i32 + xx as i32;
-                                            let cy = sprite.loc.y as i32 + dy as i32 * sprite.scale as i32 + yy as i32;
+                                    for xx in 0..sprite.x_scale {
+                                        for yy in 0..sprite.y_scale {
+                                            let cx = sprite.loc.x as i32 + dx as i32 * sprite.x_scale as i32 + xx as i32;
+                                            let cy = sprite.loc.y as i32 + dy as i32 * sprite.y_scale as i32 + yy as i32;
                                             self.tile_cache.remove(&(cx / TILE_SIZE as i32, cy / TILE_SIZE as i32));
                                         }
                                     }
@@ -649,18 +658,18 @@ impl Scene {
 
         let mut pixels = vec![0u8; pwidth as usize * pheight as usize * 4];
         for sprite in self.sprites.values() {
-            for dx in 0..SPRITE_WIDTH*sprite.scale as usize {
-                let lx = dx / sprite.scale as usize;
+            for dx in 0..SPRITE_WIDTH*sprite.x_scale as usize {
+                let lx = dx / sprite.x_scale as usize;
                 let xx = sprite.loc.x as i32 + dx as i32;
                 if xx < x || xx >= x+width as i32 {
                     continue
                 }
-                for dy in 0..SPRITE_WIDTH*sprite.scale as usize {
+                for dy in 0..SPRITE_WIDTH*sprite.y_scale as usize {
                     let yy = sprite.loc.y as i32 + dy as i32;
                     if yy < y || yy >= y+width as i32 {
                         continue
                     }
-                    let ly = dy / sprite.scale as usize;
+                    let ly = dy / sprite.y_scale as usize;
                     if sprite.collider[lx + ly*SPRITE_WIDTH] {
                         let mut do_pixel = |i| {
                             if i < pixels.len() {
@@ -806,13 +815,16 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
             continue
         }
         for object in &group.objects {
-            let scale = (object.width / 16.0) as u32;
+            let x_scale = (object.width / 16.0) as u32;
+            let y_scale = (object.height / 16.0) as u32;
+            assert_eq!(x_scale as f32 * 16.0, object.width, "badly scaled sprite {} in {}", object.id, group.name);
+            assert_eq!(y_scale as f32 * 16.0, object.height);
             let ty = (object.gid - 1) / 48;
             let tx = (object.gid - 1) - ty as u32 * 48;
 
 
             if group.name == "player" || group.name == "test_player" {
-                player_id = Some(scene.add_character(Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, scale, Color::BLUE)));
+                player_id = Some(scene.add_character(Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, x_scale, y_scale, Color::BLUE)));
             } else if group.name == "objects" {
                 let delta = if let Some(v) = object.properties.get("delta") {
                     match v {
@@ -822,13 +834,13 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
                 } else {
                     1
                 };
-                scene.add_potion(Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, scale, if delta > 0 { Color::RED } else { Color::BLUE }), delta);
+                scene.add_potion(Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, x_scale, y_scale, if delta > 0 { Color::RED } else { Color::BLUE }), delta);
             } else if group.name.starts_with("terrain") {
-                scene.add_terrain(&Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, scale, Color::RED));
+                scene.add_terrain(&Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, x_scale, y_scale, Color::RED));
             } else if group.name == "background" {
-                scene.add_background(&Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, scale, Color::RED));
+                scene.add_background(&Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, x_scale, y_scale, Color::RED));
             } else if group.name == "foreground" {
-                scene.add_foreground(&Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, scale, Color::RED));
+                scene.add_foreground(&Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, x_scale, y_scale, Color::RED));
             }
         }
     }
@@ -840,7 +852,7 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
         player.is_player = true;
         camera.x = player.loc.x;
         camera.y = player.loc.y;
-        camera_scale = player.scale as f32;
+        camera_scale = player.x_scale.max(player.y_scale) as f32;
         player.collider[2 + 4 * SPRITE_WIDTH] = false;
         player.collider[SPRITE_WIDTH-3 + 4 * SPRITE_WIDTH] = false;
     }
@@ -873,7 +885,7 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
                             if e.is_down() {
                                 if player.ground_contact {
                                     player.jumping = true;
-                                    player.velocity.y = (-68.0 / FPS) * (2.0/player.scale as f32).max(1.0);
+                                    player.velocity.y = -80.0 / FPS;
                                 }
                             } else {
                                 if !player.ground_contact && player.jumping {
@@ -884,12 +896,14 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
                         },
                         Key::A => {
                             if e.is_down() {
-                                player.scale += 1;
+                                player.x_scale += 1;
+                                player.y_scale += 1;
                             }
                         },
                         Key::O => {
                             if e.is_down() {
-                                player.scale -= 1;
+                                player.x_scale -= 1;
+                                player.y_scale -= 1;
                             }
                         },
                         _ => (),
@@ -902,10 +916,10 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
         {
             let player = scene.sprites.get_mut(&player_id).unwrap();
             let vx = if input.key_down(Key::LShift) {
-                92.0
+                130.0
             } else {
-                46.0
-            } * (5.0/player.scale as f32).max(1.0);
+                60.0
+            };
             if moving_right {
                 player.velocity.x = vx / FPS;
             } else if moving_left {
@@ -921,7 +935,7 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
             let player = scene.sprites.get_mut(&player_id).unwrap();
             camera.x = camera.x * 0.9 + (player.loc.x)*0.1;
             camera.y = camera.y * 0.9 + (player.loc.y) *0.1;
-            camera_scale = camera_scale * 0.9 + player.scale as f32 * 0.1;
+            camera_scale = camera_scale * 0.9 + player.x_scale.max(player.y_scale) as f32 * 0.1;
             gfx.clear(Color::BLACK);
             let scale = if camera_scale > 8.0 {
                 (camera_scale / 8.0).floor() as f32
