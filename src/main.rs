@@ -55,6 +55,7 @@ fn extract_sprite(src: &image::DynamicImage, x: usize, y: usize) -> [bool; SPRIT
 }
 
 struct Sprite {
+    is_player: bool,
     collider: [bool; SPRITE_WIDTH*SPRITE_WIDTH],
     loc: Vector,
     scale: u32,
@@ -76,6 +77,7 @@ impl Sprite {
 
     fn from_collider(collider: [bool; SPRITE_WIDTH*SPRITE_WIDTH], xx: f32, yy: f32, scale: u32, color: Color) -> Self {
         Self {
+            is_player: false,
             collider,
             loc: Vector::new(xx as f32, yy as f32),
             scale,
@@ -137,6 +139,12 @@ impl CollisionTree {
             children: None,
             grid: None,
         }
+    }
+
+    fn clear(&mut self) {
+        self.free_pixels = self.width*self.height;
+        self.children.take();
+        self.grid.take();
     }
 
     fn insert(&mut self, x: i32, y: i32) -> std::result::Result<bool, ()> {
@@ -335,7 +343,7 @@ impl CollisionTree {
     }
 }
 
-const TILE_SIZE: u32 = 100;
+const TILE_SIZE: u32 = 512;
 
 struct Scene {
     sprites: IndexMap<usize, Sprite>,
@@ -343,6 +351,7 @@ struct Scene {
     characters: Vec<usize>,
     particles: Vec<usize>,
     collision_map: CollisionTree,
+    rubble_map: CollisionTree,
     next_id: usize,
     tile_cache: IndexMap<(i32, i32), Image>,
 }
@@ -367,6 +376,7 @@ impl Scene {
             characters: vec![],
             particles: vec![],
             collision_map: CollisionTree::new(0, 0, 2000, 1000),
+            rubble_map: CollisionTree::new(0, 0, 2000, 1000),
             next_id: 0,
             tile_cache: IndexMap::new(),
         }
@@ -405,15 +415,42 @@ impl Scene {
 
     fn step_physics(&mut self) {
         for sprite in self.sprites.values_mut() {
+            // Collision resolution
+            let mut x_dir = 0;
+            let mut y_dir = 0;
+            for dx in 0..SPRITE_WIDTH {
+                for dy in 0..SPRITE_WIDTH {
+                    let i = dx + dy*SPRITE_WIDTH;
+                    if sprite.collider[i] {
+                        let x = sprite.loc.x as i32 + dx as i32 * sprite.scale as i32;
+                        let y = sprite.loc.y as i32 + dy as i32 * sprite.scale as i32;
+                        if self.rubble_map.check_rect(x, y, sprite.scale, sprite.scale) {
+                        } else if self.collision_map.check_rect(x, y, sprite.scale, sprite.scale) {
+                            if dx <= SPRITE_WIDTH/2 {
+                                x_dir += 1;
+                            } else {
+                                x_dir -= 1;
+                            }
+                            if dy <= SPRITE_WIDTH/2 {
+                                y_dir += 1;
+                            } else {
+                                y_dir -= 1;
+                            }
+                        }
+                    }
+                }
+            }
+            sprite.loc.x += (x_dir * sprite.scale as i32) as f32;
+            sprite.loc.y += (y_dir * sprite.scale as i32) as f32;
+
             sprite.velocity.y += 3.4 / FPS;
             let mut blocked_x = false;
             let mut blocked_y = false;
             let mut blocked_by_ground = false;
+            let mut in_rubble = false;
             let falling = sprite.velocity.y > 0.0;
             for (mut vx, mut vy) in vec![(0, (sprite.velocity.y * sprite.scale as f32) as i32), ((sprite.velocity.x * sprite.scale as f32) as i32, 0)] {
-                if vy != 0 && sprite.velocity.y < 0.0 {
-                    sprite.loc.y += vy as f32;
-                } else {
+                {
                     let mut loc_x = sprite.loc.x;
                     let mut loc_y = sprite.loc.y;
 
@@ -429,7 +466,9 @@ impl Scene {
                                 if sprite.collider[i] {
                                     let x = loc_x as i32 + dx as i32 * sprite.scale as i32;
                                     let y = loc_y as i32 + dy as i32 * sprite.scale as i32;
-                                    if self.collision_map.check_rect(x, y, sprite.scale, sprite.scale) {
+                                    if self.rubble_map.check_rect(x, y, sprite.scale, sprite.scale) {
+                                        in_rubble = true;
+                                    } else if self.collision_map.check_rect(x, y, sprite.scale, sprite.scale) {
                                         if vx.abs() >= 1 {
                                             blocked_x = true;
                                         } else {
@@ -449,6 +488,9 @@ impl Scene {
                         sprite.loc.y = loc_y;
                     }
                 }
+            }
+            if sprite.is_player && !in_rubble {
+                self.rubble_map.clear();
             }
             if !blocked_y {
                 if sprite.velocity.y.abs() >= 1.0 {
@@ -489,6 +531,7 @@ impl Scene {
                                     let x = sprite.loc.x as i32 + x as i32 * sprite.scale as i32 + dx as i32;
                                     let y = sprite.loc.y as i32 + y as i32 * sprite.scale as i32 + dy as i32;
                                     self.collision_map.insert(x ,y);
+                                    self.rubble_map.insert(x, y);
                                     self.tile_cache.remove(&(x/ TILE_SIZE as i32, y / TILE_SIZE as i32));
                                 }
                             }
@@ -573,6 +616,9 @@ impl Scene {
                     }
                 }
             }
+        }
+        if !new_sprites.is_empty() {
+            //self.rubble_map.clear();
         }
         for sprite in new_sprites {
             self.add_particle(sprite);
@@ -706,6 +752,7 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
         }
     }
     let player_id = player_id.unwrap();
+    scene.sprites[player_id].is_player = true;
 
     let mut update_timer = Timer::time_per_second(FPS);
     let mut draw_timer = Timer::time_per_second(FPS);
@@ -786,6 +833,7 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
             camera.x = camera.x * 0.9 + (player.loc.x)*0.1;
             camera.y = camera.y * 0.9 + (player.loc.y) *0.1;
             camera_scale = camera_scale * 0.9 + player.scale as f32 * 0.1;
+            gfx.clear(Color::BLACK);
             let scale = if camera_scale > 8.0 {
                 (camera_scale / 8.0).floor() as f32
             } else {
