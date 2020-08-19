@@ -385,7 +385,7 @@ impl CollisionTree {
     }
 }
 
-const TILE_SIZE: u32 = 256;
+const TILE_SIZE: u32 = 128;
 
 struct Scene {
     sprites: IndexMap<usize, Sprite>,
@@ -417,13 +417,13 @@ fn from_scale(x: i32, y: i32, x_scale: u32, y_scale: u32) -> (i32, i32) {
 
 impl Scene {
     fn new() -> Self {
+        let world_min = -10000;
+        let world_width = 40000;
         let mut tile_cache = IndexMap::new();
         let mut foreground_tile_cache = IndexMap::new();
         let mut background_tile_cache = IndexMap::new();
-        for x in -1000..1000 {
-            for y in -1000..1000 {
-                let x = x * TILE_SIZE as i32;
-                let y = y * TILE_SIZE as i32;
+        for x in world_min/TILE_SIZE as i32..(world_min+world_width)/TILE_SIZE as i32 {
+            for y in world_min/TILE_SIZE as i32..(world_min+world_width)/TILE_SIZE as i32 {
                 tile_cache.insert((x, y), None);
                 foreground_tile_cache.insert((x, y), None);
                 background_tile_cache.insert((x, y), None);
@@ -435,12 +435,12 @@ impl Scene {
             potions: vec![],
             characters: vec![],
             particles: vec![],
-            collision_map: CollisionTree::new(-10000, -10000, 20000, 20000),
-            rubble_map: CollisionTree::new(-10000, -10000, 20000, 20000),
+            collision_map: CollisionTree::new(world_min, world_min, world_width as u32, world_width as u32),
+            rubble_map: CollisionTree::new(world_min, world_min, world_width as u32, world_width as u32),
             next_id: 0,
             tile_cache,
-            foreground_map: CollisionTree::new(-10000, -10000, 20000, 20000),
-            background_map: CollisionTree::new(-10000, -10000, 20000, 20000),
+            foreground_map: CollisionTree::new(world_min, world_min, world_width as u32, world_width as u32),
+            background_map: CollisionTree::new(world_min, world_min, world_width as u32, world_width as u32),
             foreground_tile_cache,
             background_tile_cache,
         }
@@ -1113,6 +1113,7 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
             };
             scene.draw(&mut gfx, camera.x as i32, camera.y as i32, 1920, 1080, scale);
             gfx.present(&window)?;
+            //std::process::exit(0);
         }
     }
 }
