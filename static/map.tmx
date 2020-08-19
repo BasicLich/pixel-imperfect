@@ -329,10 +329,10 @@
    </properties>
   </object>
  </objectgroup>
- <objectgroup id="6" name="test_player" tintcolor="#0000ff">
+ <objectgroup id="6" name="test_player" visible="0" tintcolor="#0000ff">
   <object id="228" gid="176" x="4203" y="4210" width="16" height="16"/>
  </objectgroup>
- <objectgroup id="7" name="player" visible="0" locked="1">
+ <objectgroup id="7" name="player" locked="1">
   <object id="690" gid="176" x="4434" y="6774" width="48" height="48"/>
  </objectgroup>
  <objectgroup id="2" name="foreground" locked="1" tintcolor="#64c864">
