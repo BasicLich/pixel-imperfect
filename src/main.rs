@@ -235,6 +235,19 @@ impl CollisionTree {
         }
     }
 
+    fn clear_sprite(&mut self, sprite: Sprite) {
+        for x in 0..SPRITE_WIDTH {
+            for y in 0..SPRITE_WIDTH {
+                let i = x + y * SPRITE_WIDTH;
+                if sprite.collider[i] {
+                    let rx = x as i32 * sprite.x_scale as i32 + sprite.loc.x as i32;
+                    let ry = y as i32 * sprite.y_scale as i32 + sprite.loc.y as i32;
+                    self.remove_rect(rx, ry, sprite.x_scale, sprite.y_scale);
+                }
+            }
+        }
+    }
+
     fn check_point(&self, x: i32, y: i32) -> bool {
         if x < self.x || x >= self.x+self.width as i32 || y < self.y || y >= self.y+self.height as i32 {
             return false;
@@ -438,6 +451,15 @@ impl Scene {
                 self.tile_cache.remove(&(x / TILE_SIZE as i32, y / TILE_SIZE as i32));
             }
         }
+    }
+
+    fn clear_terrain(&mut self, sprite: Sprite) {
+        for x in sprite.loc.x as i32..sprite.loc.x as i32 + SPRITE_WIDTH as i32 * sprite.x_scale as i32 {
+            for y in sprite.loc.y as i32..sprite.loc.y as i32 + SPRITE_WIDTH as i32 * sprite.y_scale as i32 {
+                self.tile_cache.remove(&(x / TILE_SIZE as i32, y / TILE_SIZE as i32));
+            }
+        }
+        self.collision_map.clear_sprite(sprite);
     }
 
     fn add_foreground(&mut self, sprite: &Sprite) {
@@ -667,7 +689,7 @@ impl Scene {
                                     }
                                 }
                                 if self.collision_map.remove_rect(x, y, sprite.x_scale, sprite.y_scale).1 > 0 {
-                                    if self.particles.len() + new_sprites.len() < 100 {
+                                    if self.particles.len() + new_sprites.len() < 30 {
                                         let mut collider = [false; SPRITE_WIDTH*SPRITE_WIDTH];
                                         collider[0] = true;
                                         let mut new_sprite = Sprite::from_collider(collider, x as f32, y as f32, sprite.x_scale, sprite.y_scale, Color::WHITE);
@@ -866,6 +888,7 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
     let map = tiled::parse(&*map_data).unwrap();
     let mut scene = Scene::new();
     let mut player_id = None;
+    let mut negative_terrain = vec![];
     for group in &map.object_groups {
         if !group.visible {
             continue
@@ -911,12 +934,17 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
                 scene.add_potion(Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, x_scale, y_scale, if x_delta > 0 || y_delta > 0 { Color::RED } else { Color::BLUE }), x_delta, y_delta);
             } else if group.name.starts_with("terrain") {
                 scene.add_terrain(&Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, x_scale, y_scale, Color::RED));
+            } else if group.name.starts_with("negative-terrain") {
+                negative_terrain.push(Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, x_scale, y_scale, Color::RED));
             } else if group.name == "background" {
                 scene.add_background(&Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, x_scale, y_scale, Color::RED));
             } else if group.name == "foreground" {
                 scene.add_foreground(&Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, x_scale, y_scale, Color::RED));
             }
         }
+    }
+    for terrain in negative_terrain {
+        scene.clear_terrain(terrain);
     }
     let player_id = player_id.unwrap();
     let mut camera = Vector::new(0.0, 0.0);
@@ -1002,8 +1030,8 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
                 player.velocity.x = 0.0;
             }
         }
-        //while update_timer.tick() {
-        if update_timer.exhaust().is_some() {
+        while update_timer.tick() {
+        //if update_timer.exhaust().is_some() {
             scene.step_physics();
         }
         if draw_timer.exhaust().is_some() {
