@@ -667,7 +667,7 @@ impl Scene {
                                     }
                                 }
                                 if self.collision_map.remove_rect(x, y, sprite.x_scale, sprite.y_scale).1 > 0 {
-                                    if self.particles.len() + new_sprites.len() < 0 {
+                                    if self.particles.len() + new_sprites.len() < 100 {
                                         let mut collider = [false; SPRITE_WIDTH*SPRITE_WIDTH];
                                         collider[0] = true;
                                         let mut new_sprite = Sprite::from_collider(collider, x as f32, y as f32, sprite.x_scale, sprite.y_scale, Color::WHITE);
