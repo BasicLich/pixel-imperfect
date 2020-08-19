@@ -17,7 +17,7 @@ const SPRITES_HEIGHT:usize = 352;
 const SPRITE_WIDTH:usize = 16;
 const PIXEL_CHUNK: u32 = 4;
 const MAX_SCALE: usize = 18;
-const SCALE_CHANGE_TIMEOUT: f32 = 2.0;
+const SCALE_CHANGE_TIMEOUT: f32 = 1.0;
 
 const FOREGROUND_COLOR: Color = Color { r: 100.0/255.0, g: 200.0/255.0, b: 100.0/255.0, a: 1.0 };
 const BACKGROUND_COLOR: Color = Color { r: 50.0/255.0, g: 50.0/255.0, b: 100.0/255.0, a: 1.0 };
@@ -535,8 +535,8 @@ impl Scene {
                         }
                     }
                 }
-                sprite.loc.x += (x_dir * sprite.x_scale as i32) as f32;
-                sprite.loc.y += (y_dir * sprite.y_scale as i32) as f32;
+                sprite.loc.x += (x_dir.max(-1).min(1) * sprite.x_scale as i32) as f32;
+                sprite.loc.y += (y_dir.max(-1).min(1) * sprite.y_scale as i32) as f32;
             }
 
             sprite.velocity.y += 3.4 / FPS;
@@ -619,7 +619,7 @@ impl Scene {
         let mut to_remove = IndexSet::new();
         for particle_id in &self.particles {
             let sprite = &self.sprites[particle_id];
-            if sprite.loc.y > 3000.0 {
+            if sprite.loc.y > 30000.0 {
                 to_remove.insert(*particle_id);
                 self.sprite_cache.remove(particle_id);
                 continue;
@@ -708,32 +708,32 @@ impl Scene {
                             if true {
                                 let x = sprite.loc.x as i32 + dx as i32 * sprite.x_scale as i32;
                                 let y = sprite.loc.y as i32 + dy as i32 * sprite.y_scale as i32;
-                                if self.foreground_map.remove_rect(x, y, sprite.x_scale, sprite.y_scale).1 > 0 {
-                                    for xx in 0..sprite.x_scale {
-                                        for yy in 0..sprite.y_scale {
-                                            let cx = sprite.loc.x as i32 + dx as i32 * sprite.x_scale as i32 + xx as i32;
-                                            let cy = sprite.loc.y as i32 + dy as i32 * sprite.y_scale as i32 + yy as i32;
-                                            self.foreground_tile_cache.remove(&(cx / TILE_SIZE as i32, cy / TILE_SIZE as i32));
+                                if Vector::new(cx, cy).distance(Vector::new(x as f32, y as f32)) < SPRITE_WIDTH as f32 * sprite.x_scale.max(sprite.y_scale) as f32 {
+                                    if self.foreground_map.remove_rect(x, y, sprite.x_scale, sprite.y_scale).1 > 0 {
+                                        for xx in 0..sprite.x_scale {
+                                            for yy in 0..sprite.y_scale {
+                                                let cx = sprite.loc.x as i32 + dx as i32 * sprite.x_scale as i32 + xx as i32;
+                                                let cy = sprite.loc.y as i32 + dy as i32 * sprite.y_scale as i32 + yy as i32;
+                                                self.foreground_tile_cache.remove(&(cx / TILE_SIZE as i32, cy / TILE_SIZE as i32));
+                                            }
                                         }
                                     }
-                                }
-                                if self.collision_map.remove_rect(x, y, sprite.x_scale, sprite.y_scale).1 > 0 {
-                                    if self.particles.len() + new_sprites.len() < 30 {
+                                    if self.collision_map.remove_rect(x, y, sprite.x_scale, sprite.y_scale).1 > 0 {
                                         let mut collider = [false; SPRITE_WIDTH*SPRITE_WIDTH];
                                         collider[0] = true;
                                         let mut new_sprite = Sprite::from_collider(collider, x as f32, y as f32, sprite.x_scale, sprite.y_scale, Color::WHITE);
                                         let a = (cy-y as f32).atan2(cx - x as f32) + std::f32::consts::FRAC_PI_4;
                                         new_sprite.velocity = Vector::new(a.cos() * 100.0/FPS, a.sin() * 100.0/FPS);
                                         new_sprites.push(new_sprite);
-                                    }
-                                    for xx in 0..sprite.x_scale {
-                                        for yy in 0..sprite.y_scale {
-                                            let cx = sprite.loc.x as i32 + dx as i32 * sprite.x_scale as i32 + xx as i32;
-                                            let cy = sprite.loc.y as i32 + dy as i32 * sprite.y_scale as i32 + yy as i32;
-                                            self.tile_cache.remove(&(cx / TILE_SIZE as i32, cy / TILE_SIZE as i32));
+                                        for xx in 0..sprite.x_scale {
+                                            for yy in 0..sprite.y_scale {
+                                                let cx = sprite.loc.x as i32 + dx as i32 * sprite.x_scale as i32 + xx as i32;
+                                                let cy = sprite.loc.y as i32 + dy as i32 * sprite.y_scale as i32 + yy as i32;
+                                                self.tile_cache.remove(&(cx / TILE_SIZE as i32, cy / TILE_SIZE as i32));
+                                            }
                                         }
-                                    }
 
+                                    }
                                 }
                             }
                         }
