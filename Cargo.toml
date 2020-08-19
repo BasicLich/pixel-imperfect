@@ -16,4 +16,4 @@ tiled = "0.9"
 
 
 [profile.release]
-#debug = true
+debug = true

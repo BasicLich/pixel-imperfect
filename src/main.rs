@@ -66,7 +66,8 @@ struct Sprite {
     vy_slop: f32,
     color: Color,
     scale_timer: Option<f32>,
-    pending_scale: i32,
+    pending_x_scale: i32,
+    pending_y_scale: i32,
     sleep_timer: f32,
 }
 
@@ -89,7 +90,8 @@ impl Sprite {
             vy_slop: 0.0,
             color,
             scale_timer: None,
-            pending_scale: 0,
+            pending_x_scale: 0,
+            pending_y_scale: 0,
             sleep_timer: 0.0,
         }
     }
@@ -117,7 +119,7 @@ impl Sprite {
     }
 }
 
-const LEAF_SIZE: usize = 16;
+const LEAF_SIZE: usize = 64;
 struct CollisionTree {
     x: i32,
     y: i32,
@@ -345,21 +347,21 @@ impl CollisionTree {
     }
 }
 
-const TILE_SIZE: u32 = 512;
+const TILE_SIZE: u32 = 256;
 
 struct Scene {
     sprites: IndexMap<usize, Sprite>,
-    potions: Vec<(usize, i32)>,
+    potions: Vec<(usize, i32, i32)>,
     characters: Vec<usize>,
     particles: Vec<usize>,
     collision_map: CollisionTree,
     rubble_map: CollisionTree,
     next_id: usize,
-    tile_cache: IndexMap<(i32, i32), Image>,
+    tile_cache: IndexMap<(i32, i32), Option<Image>>,
     foreground_map: CollisionTree,
     background_map: CollisionTree,
-    foreground_tile_cache: IndexMap<(i32, i32), Image>,
-    background_tile_cache: IndexMap<(i32, i32), Image>,
+    foreground_tile_cache: IndexMap<(i32, i32), Option<Image>>,
+    background_tile_cache: IndexMap<(i32, i32), Option<Image>>,
 }
 
 fn to_scale(x: i32, y: i32, x_scale: u32, y_scale: u32) -> (i32, i32) {
@@ -376,6 +378,18 @@ fn from_scale(x: i32, y: i32, x_scale: u32, y_scale: u32) -> (i32, i32) {
 
 impl Scene {
     fn new() -> Self {
+        let mut tile_cache = IndexMap::new();
+        let mut foreground_tile_cache = IndexMap::new();
+        let mut background_tile_cache = IndexMap::new();
+        for x in -100..100 {
+            for y in -100..100 {
+                let x = x * TILE_SIZE as i32;
+                let y = y * TILE_SIZE as i32;
+                tile_cache.insert((x, y), None);
+                foreground_tile_cache.insert((x, y), None);
+                background_tile_cache.insert((x, y), None);
+            }
+        }
         Self {
             sprites: IndexMap::new(),
             potions: vec![],
@@ -384,11 +398,11 @@ impl Scene {
             collision_map: CollisionTree::new(-10000, -10000, 20000, 20000),
             rubble_map: CollisionTree::new(-10000, -10000, 20000, 20000),
             next_id: 0,
-            tile_cache: IndexMap::new(),
+            tile_cache,
             foreground_map: CollisionTree::new(-10000, -10000, 20000, 20000),
             background_map: CollisionTree::new(-10000, -10000, 20000, 20000),
-            foreground_tile_cache: IndexMap::new(),
-            background_tile_cache: IndexMap::new(),
+            foreground_tile_cache,
+            background_tile_cache,
         }
     }
 
@@ -399,9 +413,9 @@ impl Scene {
         id
     }
 
-    fn add_potion(&mut self, sprite: Sprite, delta: i32) -> usize {
+    fn add_potion(&mut self, sprite: Sprite, x_delta: i32, y_delta: i32) -> usize {
         let id = self.add_sprite(sprite);
-        self.potions.push((id, delta));
+        self.potions.push((id, x_delta, y_delta));
         id
     }
 
@@ -419,14 +433,29 @@ impl Scene {
 
     fn add_terrain(&mut self, sprite: &Sprite) {
         self.collision_map.add_sprite(sprite);
+        for x in sprite.loc.x as i32..sprite.loc.x as i32 + SPRITE_WIDTH as i32 * sprite.x_scale as i32 {
+            for y in sprite.loc.y as i32..sprite.loc.y as i32 + SPRITE_WIDTH as i32 * sprite.y_scale as i32 {
+                self.tile_cache.remove(&(x / TILE_SIZE as i32, y / TILE_SIZE as i32));
+            }
+        }
     }
 
     fn add_foreground(&mut self, sprite: &Sprite) {
         self.foreground_map.add_sprite(sprite);
+        for x in sprite.loc.x as i32..sprite.loc.x as i32 + SPRITE_WIDTH as i32 * sprite.x_scale as i32 {
+            for y in sprite.loc.y as i32..sprite.loc.y as i32 + SPRITE_WIDTH as i32 * sprite.y_scale as i32 {
+                self.foreground_tile_cache.remove(&(x / TILE_SIZE as i32, y / TILE_SIZE as i32));
+            }
+        }
     }
 
     fn add_background(&mut self, sprite: &Sprite) {
         self.background_map.add_sprite(sprite);
+        for x in sprite.loc.x as i32..sprite.loc.x as i32 + SPRITE_WIDTH as i32 * sprite.x_scale as i32 {
+            for y in sprite.loc.y as i32..sprite.loc.y as i32 + SPRITE_WIDTH as i32 * sprite.y_scale as i32 {
+                self.background_tile_cache.remove(&(x / TILE_SIZE as i32, y / TILE_SIZE as i32));
+            }
+        }
     }
 
     fn step_physics(&mut self) {
@@ -472,11 +501,14 @@ impl Scene {
                     let mut loc_x = sprite.loc.x;
                     let mut loc_y = sprite.loc.y;
 
+                    let step_x = (sprite.x_scale as f32 / 8.0).min(1.0).min(sprite.velocity.x.abs()).max(1.0).copysign(sprite.velocity.x);
+                    let step_y = (sprite.y_scale as f32 / 8.0).min(1.0).min(sprite.velocity.y.abs()).max(1.0).copysign(sprite.velocity.y);
+
                     'outer: while vy.abs() >= 1 || vx.abs() >= 1 {
                         if vy.abs() >= 1 {
-                            loc_y += 1.0f32.copysign(sprite.velocity.y);
+                            loc_y += step_y;
                         } else {
-                            loc_x += 1.0f32.copysign(sprite.velocity.x);
+                            loc_x += step_x;
                         }
                         for dx in 0..SPRITE_WIDTH {
                             for dy in 0..SPRITE_WIDTH {
@@ -498,9 +530,9 @@ impl Scene {
                             }
                         }
                         if vy.abs() >= 1 {
-                            vy -= vy.signum();
+                            vy -= step_y as i32;
                         } else {
-                            vx -= vx.signum();
+                            vx -= step_x as i32;
                         }
                         sprite.loc.x = loc_x;
                         sprite.loc.y = loc_y;
@@ -538,6 +570,10 @@ impl Scene {
         let mut to_remove = IndexSet::new();
         for particle_id in &self.particles {
             let sprite = &self.sprites[particle_id];
+            if sprite.loc.y > 3000.0 {
+                to_remove.insert(*particle_id);
+                continue;
+            }
             if sprite.ground_contact && sprite.sleep_timer > 0.5 {
                 to_remove.insert(*particle_id);
                 for x in 0..SPRITE_WIDTH {
@@ -565,28 +601,29 @@ impl Scene {
         let mut consumed = IndexSet::new();
         for character_id in &self.characters {
             let character = &self.sprites[character_id];
-            for (potion_id, delta) in &self.potions {
+            for (potion_id, x_delta, y_delta) in &self.potions {
                 if consumed.contains(potion_id) {
                     continue;
                 }
                 let potion = &self.sprites[potion_id];
                 if character.overlap(potion) {
                     consumed.insert(*potion_id);
-                    drinkers.push((*character_id, *delta));
+                    drinkers.push((*character_id, *x_delta, *y_delta));
                 }
             }
         }
         for potion_id in consumed {
-            self.potions.retain(|(id, _)| *id != potion_id);
+            self.potions.retain(|(id, _, _)| *id != potion_id);
             self.sprites.remove(&potion_id);
         }
         let mut new_sprites = vec![];
-        for (sprite_id, delta) in drinkers {
+        for (sprite_id, x_delta, y_delta) in drinkers {
             let sprite = self.sprites.get_mut(&sprite_id).unwrap();
             if sprite.scale_timer.is_none() {
                 sprite.scale_timer = Some(SCALE_CHANGE_TIMEOUT);
             }
-            sprite.pending_scale += delta;
+            sprite.pending_x_scale += x_delta;
+            sprite.pending_y_scale += y_delta;
         }
 
         for character_id in self.characters.clone() {
@@ -597,20 +634,22 @@ impl Scene {
                     continue
                 }
                 sprite.scale_timer.take();
-                let delta = sprite.pending_scale;
-                sprite.pending_scale = 0;
-                if delta == 0 {
+                let x_delta = sprite.pending_x_scale;
+                let y_delta = sprite.pending_y_scale;
+                sprite.pending_x_scale = 0;
+                sprite.pending_y_scale = 0;
+                if x_delta == 0 && y_delta == 0 {
                     continue
                 }
                 let initial_width = SPRITE_WIDTH as u32 * sprite.x_scale;
                 let initial_height = SPRITE_WIDTH as u32 * sprite.y_scale;
-                sprite.x_scale = (sprite.x_scale as i32 + delta).max(1) as u32;
-                sprite.y_scale = (sprite.y_scale as i32 + delta).max(1) as u32;
+                sprite.x_scale = (sprite.x_scale as i32 + x_delta).max(1) as u32;
+                sprite.y_scale = (sprite.y_scale as i32 + y_delta).max(1) as u32;
                 sprite.loc.x -= (SPRITE_WIDTH as f32 * sprite.x_scale as f32 - initial_width as f32)/2.0;
                 sprite.loc.y -= SPRITE_WIDTH as f32 * sprite.y_scale as f32 - initial_height as f32;
                 //FIXME: Why is this offset necessary?
                 sprite.loc.y -= 8.0;
-                if delta > 0 {
+                if x_delta > 0 || y_delta > 0 {
                     let cx = sprite.loc.x + SPRITE_WIDTH as f32 / 2.0;
                     let cy = sprite.loc.y + SPRITE_WIDTH as f32 / 2.0;
                     for dx in 0..SPRITE_WIDTH {
@@ -618,13 +657,24 @@ impl Scene {
                             if true {
                                 let x = sprite.loc.x as i32 + dx as i32 * sprite.x_scale as i32;
                                 let y = sprite.loc.y as i32 + dy as i32 * sprite.y_scale as i32;
+                                if self.foreground_map.remove_rect(x, y, sprite.x_scale, sprite.y_scale).1 > 0 {
+                                    for xx in 0..sprite.x_scale {
+                                        for yy in 0..sprite.y_scale {
+                                            let cx = sprite.loc.x as i32 + dx as i32 * sprite.x_scale as i32 + xx as i32;
+                                            let cy = sprite.loc.y as i32 + dy as i32 * sprite.y_scale as i32 + yy as i32;
+                                            self.foreground_tile_cache.remove(&(cx / TILE_SIZE as i32, cy / TILE_SIZE as i32));
+                                        }
+                                    }
+                                }
                                 if self.collision_map.remove_rect(x, y, sprite.x_scale, sprite.y_scale).1 > 0 {
-                                    let mut collider = [false; SPRITE_WIDTH*SPRITE_WIDTH];
-                                    collider[0] = true;
-                                    let mut new_sprite = Sprite::from_collider(collider, x as f32, y as f32, sprite.x_scale, sprite.y_scale, Color::GREEN);
-                                    let a = (cy-y as f32).atan2(cx - x as f32) + std::f32::consts::FRAC_PI_4;
-                                    new_sprite.velocity = Vector::new(a.cos() * 100.0/FPS, a.sin() * 100.0/FPS);
-                                    new_sprites.push(new_sprite);
+                                    if self.particles.len() + new_sprites.len() < 0 {
+                                        let mut collider = [false; SPRITE_WIDTH*SPRITE_WIDTH];
+                                        collider[0] = true;
+                                        let mut new_sprite = Sprite::from_collider(collider, x as f32, y as f32, sprite.x_scale, sprite.y_scale, Color::WHITE);
+                                        let a = (cy-y as f32).atan2(cx - x as f32) + std::f32::consts::FRAC_PI_4;
+                                        new_sprite.velocity = Vector::new(a.cos() * 100.0/FPS, a.sin() * 100.0/FPS);
+                                        new_sprites.push(new_sprite);
+                                    }
                                     for xx in 0..sprite.x_scale {
                                         for yy in 0..sprite.y_scale {
                                             let cx = sprite.loc.x as i32 + dx as i32 * sprite.x_scale as i32 + xx as i32;
@@ -723,10 +773,12 @@ impl Scene {
                         PixelFormat::RGBA,
                     ).unwrap();
                     tile.set_magnification(golem::TextureFilter::Nearest).unwrap();
-                    self.background_tile_cache.insert((xx, yy), tile);
+                    self.background_tile_cache.insert((xx, yy), Some(tile));
                 }
-                let region = Rectangle::new(Vector::new((xx*TILE_SIZE as i32 - x) as f32 / scale, (yy*TILE_SIZE as i32 - y) as f32 / scale), Vector::new(TILE_SIZE as f32 / scale, TILE_SIZE as f32 / scale));
-                gfx.draw_image(self.background_tile_cache.get(&(xx, yy)).as_ref().unwrap(), region);
+                if let Some(Some(tile)) = self.background_tile_cache.get(&(xx, yy)) {
+                    let region = Rectangle::new(Vector::new((xx*TILE_SIZE as i32 - x) as f32 / scale, (yy*TILE_SIZE as i32 - y) as f32 / scale), Vector::new(TILE_SIZE as f32 / scale, TILE_SIZE as f32 / scale));
+                    gfx.draw_image(tile, region);
+                }
             }
         }
 
@@ -764,10 +816,12 @@ impl Scene {
                         PixelFormat::RGBA,
                     ).unwrap();
                     tile.set_magnification(golem::TextureFilter::Nearest).unwrap();
-                    self.tile_cache.insert((xx, yy), tile);
+                    self.tile_cache.insert((xx, yy), Some(tile));
                 }
-                let region = Rectangle::new(Vector::new((xx*TILE_SIZE as i32 - x) as f32 / scale, (yy*TILE_SIZE as i32 - y) as f32 / scale), Vector::new(TILE_SIZE as f32 / scale, TILE_SIZE as f32 / scale));
-                gfx.draw_image(self.tile_cache.get(&(xx, yy)).as_ref().unwrap(), region);
+                if let Some(Some(tile)) = self.tile_cache.get(&(xx, yy)) {
+                    let region = Rectangle::new(Vector::new((xx*TILE_SIZE as i32 - x) as f32 / scale, (yy*TILE_SIZE as i32 - y) as f32 / scale), Vector::new(TILE_SIZE as f32 / scale, TILE_SIZE as f32 / scale));
+                    gfx.draw_image(tile, region);
+                }
             }
         }
 
@@ -794,10 +848,12 @@ impl Scene {
                         PixelFormat::RGBA,
                     ).unwrap();
                     tile.set_magnification(golem::TextureFilter::Nearest).unwrap();
-                    self.foreground_tile_cache.insert((xx, yy), tile);
+                    self.foreground_tile_cache.insert((xx, yy), Some(tile));
                 }
-                let region = Rectangle::new(Vector::new((xx*TILE_SIZE as i32 - x) as f32 / scale, (yy*TILE_SIZE as i32 - y) as f32 / scale), Vector::new(TILE_SIZE as f32 / scale, TILE_SIZE as f32 / scale));
-                gfx.draw_image(self.foreground_tile_cache.get(&(xx, yy)).as_ref().unwrap(), region);
+                if let Some(Some(tile)) = self.foreground_tile_cache.get(&(xx, yy)) {
+                    let region = Rectangle::new(Vector::new((xx*TILE_SIZE as i32 - x) as f32 / scale, (yy*TILE_SIZE as i32 - y) as f32 / scale), Vector::new(TILE_SIZE as f32 / scale, TILE_SIZE as f32 / scale));
+                    gfx.draw_image(tile, region);
+                }
             }
         }
 
@@ -826,7 +882,12 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
             if group.name == "player" || group.name == "test_player" {
                 player_id = Some(scene.add_character(Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, x_scale, y_scale, Color::BLUE)));
             } else if group.name == "objects" {
-                let delta = if let Some(v) = object.properties.get("delta") {
+                let x_delta = if let Some(v) = object.properties.get("x_delta") {
+                    match v {
+                        tiled::PropertyValue::IntValue(v) => *v,
+                        _ => 1,
+                    }
+                } else if let Some(v) = object.properties.get("delta") {
                     match v {
                         tiled::PropertyValue::IntValue(v) => *v,
                         _ => 1,
@@ -834,7 +895,20 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
                 } else {
                     1
                 };
-                scene.add_potion(Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, x_scale, y_scale, if delta > 0 { Color::RED } else { Color::BLUE }), delta);
+                let y_delta = if let Some(v) = object.properties.get("y_delta") {
+                    match v {
+                        tiled::PropertyValue::IntValue(v) => *v,
+                        _ => 1,
+                    }
+                } else if let Some(v) = object.properties.get("delta") {
+                    match v {
+                        tiled::PropertyValue::IntValue(v) => *v,
+                        _ => 1,
+                    }
+                } else {
+                    1
+                };
+                scene.add_potion(Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, x_scale, y_scale, if x_delta > 0 || y_delta > 0 { Color::RED } else { Color::BLUE }), x_delta, y_delta);
             } else if group.name.starts_with("terrain") {
                 scene.add_terrain(&Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, x_scale, y_scale, Color::RED));
             } else if group.name == "background" {
@@ -853,8 +927,8 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
         camera.x = player.loc.x;
         camera.y = player.loc.y;
         camera_scale = player.x_scale.max(player.y_scale) as f32;
-        player.collider[2 + 4 * SPRITE_WIDTH] = false;
-        player.collider[SPRITE_WIDTH-3 + 4 * SPRITE_WIDTH] = false;
+        //player.collider[2 + 4 * SPRITE_WIDTH] = false;
+        //player.collider[SPRITE_WIDTH-3 + 4 * SPRITE_WIDTH] = false;
     }
 
     let mut update_timer = Timer::time_per_second(FPS);
@@ -915,7 +989,7 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
 
         {
             let player = scene.sprites.get_mut(&player_id).unwrap();
-            let vx = if input.key_down(Key::LShift) {
+            let vx = if input.key_down(Key::LShift) && player.ground_contact {
                 130.0
             } else {
                 60.0
@@ -928,14 +1002,15 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
                 player.velocity.x = 0.0;
             }
         }
-        while update_timer.tick() {
+        //while update_timer.tick() {
+        if update_timer.exhaust().is_some() {
             scene.step_physics();
         }
         if draw_timer.exhaust().is_some() {
             let player = scene.sprites.get_mut(&player_id).unwrap();
             camera.x = camera.x * 0.9 + (player.loc.x)*0.1;
             camera.y = camera.y * 0.9 + (player.loc.y) *0.1;
-            camera_scale = camera_scale * 0.9 + player.x_scale.max(player.y_scale) as f32 * 0.1;
+            camera_scale = camera_scale * 0.9 + player.x_scale.max(player.y_scale).min(30) as f32 * 0.1;
             gfx.clear(Color::BLACK);
             let scale = if camera_scale > 8.0 {
                 (camera_scale / 8.0).floor() as f32
