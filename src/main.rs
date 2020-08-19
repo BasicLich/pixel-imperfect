@@ -783,7 +783,7 @@ impl Scene {
                     self.background_tile_cache.insert((xx, yy), Some(tile));
                 }
                 if let Some(Some(tile)) = self.background_tile_cache.get(&(xx, yy)) {
-                    let region = Rectangle::new(Vector::new((xx*TILE_SIZE as i32 - x) as f32 / scale, (yy*TILE_SIZE as i32 - y) as f32 / scale), Vector::new(TILE_SIZE as f32 / scale, TILE_SIZE as f32 / scale));
+                    let region = Rectangle::new(Vector::new(((xx*TILE_SIZE as i32 - x) as f32 / scale).floor(), ((yy*TILE_SIZE as i32 - y) as f32 / scale).floor()), (Vector::new((TILE_SIZE as f32 / scale).ceil(), (TILE_SIZE as f32 / scale).ceil())));
                     gfx.draw_image(tile, region);
                 }
             }
@@ -799,7 +799,7 @@ impl Scene {
                     self.sprite_cache.insert(*sprite_id, sprite.image(gfx));
                 }
                 let sprite_image = &self.sprite_cache[sprite_id];
-                let region = Rectangle::new(Vector::new((sprite.loc.x as i32 - x) as f32 /scale, (sprite.loc.y as i32 - y) as f32/scale), Vector::new(w/scale, h/scale));
+                let region = Rectangle::new(Vector::new(((sprite.loc.x as i32 - x) as f32 /scale).floor(), ((sprite.loc.y as i32 - y) as f32/scale).floor()), Vector::new((w/scale).ceil(), (h/scale).ceil()));
                 gfx.draw_image(sprite_image, region);
                 if let Some(t) = sprite.scale_timer {
                     let red_shift: u8 = ((t * (10.0 + ((SCALE_CHANGE_TIMEOUT - t) / SCALE_CHANGE_TIMEOUT) * 20.0).sin() + 1.0) * 255.0) as u8;
@@ -855,7 +855,7 @@ impl Scene {
                     self.tile_cache.insert((xx, yy), Some(tile));
                 }
                 if let Some(Some(tile)) = self.tile_cache.get(&(xx, yy)) {
-                    let region = Rectangle::new(Vector::new((xx*TILE_SIZE as i32 - x) as f32 / scale, (yy*TILE_SIZE as i32 - y) as f32 / scale), Vector::new(TILE_SIZE as f32 / scale, TILE_SIZE as f32 / scale));
+                    let region = Rectangle::new(Vector::new(((xx*TILE_SIZE as i32 - x) as f32 / scale).floor(), ((yy*TILE_SIZE as i32 - y) as f32 / scale).floor()), Vector::new((TILE_SIZE as f32 / scale).ceil(), (TILE_SIZE as f32 / scale).ceil()));
                     gfx.draw_image(tile, region);
                 }
             }
@@ -887,7 +887,7 @@ impl Scene {
                     self.foreground_tile_cache.insert((xx, yy), Some(tile));
                 }
                 if let Some(Some(tile)) = self.foreground_tile_cache.get(&(xx, yy)) {
-                    let region = Rectangle::new(Vector::new((xx*TILE_SIZE as i32 - x) as f32 / scale, (yy*TILE_SIZE as i32 - y) as f32 / scale), Vector::new(TILE_SIZE as f32 / scale, TILE_SIZE as f32 / scale));
+                    let region = Rectangle::new(Vector::new(((xx*TILE_SIZE as i32 - x) as f32 / scale).floor(), ((yy*TILE_SIZE as i32 - y) as f32 / scale).floor()), Vector::new((TILE_SIZE as f32 / scale).ceil(), (TILE_SIZE as f32 / scale).ceil()));
                     gfx.draw_image(tile, region);
                 }
             }
@@ -1113,7 +1113,6 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
             };
             scene.draw(&mut gfx, camera.x as i32, camera.y as i32, 1920, 1080, scale);
             gfx.present(&window)?;
-            //std::process::exit(0);
         }
     }
 }
