@@ -1192,6 +1192,8 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
         step_cache_warmer(&mut scene, &mut gfx, camera_scale);
     }
     */
+
+    let mut paused = false;
     loop {
         while let Some(e) = input.next_event().await {
             let player = scene.sprites.get_mut(&player_id).unwrap();
@@ -1237,11 +1239,21 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
                                 moving_right = false;
                             }
                         },
+                        GamepadButton::Start => {
+                            if e.is_down() {
+                                paused = !paused;
+                            }
+                        },
                         _ => (),
                     }
                 },
                 Event::KeyboardInput(e) => {
                     match e.key() {
+                        Key::P => {
+                            if e.is_down() {
+                                paused = !paused;
+                            }
+                        },
                         Key::Right | Key::D => {
                             if e.is_down() {
                                 moving_right = true;
@@ -1291,7 +1303,7 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
                 player.velocity.x = 0.0;
             }
         }
-        while update_timer.tick() {
+        while update_timer.tick() && !paused {
         //if update_timer.exhaust().is_some() {
             let player_loc = scene.sprites.get_mut(&player_id).unwrap().loc;
             scene.step_physics(player_loc, camera_scale);
@@ -1309,6 +1321,9 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
                 1.0 / (8.0 / camera_scale) as f32
             };
             scene.draw(&mut gfx, camera.x as i32, camera.y as i32, 1920, 1080, scale);
+            if paused {
+                gfx.fill_rect(&Rectangle::new_sized(Vector::new(1920.0, 1080.0)), Color::from_rgba(255, 255, 255, 0.4));
+            }
             gfx.present(&window)?;
         }
     }
