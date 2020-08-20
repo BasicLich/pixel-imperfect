@@ -516,6 +516,7 @@ struct Scene {
     potions: Vec<(usize, PotionType)>,
     characters: Vec<usize>,
     particles: Vec<usize>,
+    collectables: Vec<usize>,
     collision_map: CollisionTree,
     rubble_map: CollisionTree,
     next_id: usize,
@@ -523,6 +524,7 @@ struct Scene {
     background_map: CollisionTree,
     tile_cache: HashMap<(i32, i32), ((Option<Vec<u8>>, Option<Image>), (Option<Vec<u8>>,  Option<Image>), (Option<Vec<u8>>, Option<Image>))>,
     tile_queue: IndexSet<(u32, i32, i32)>,
+    score: u32,
 }
 
 fn to_scale(x: i32, y: i32, x_scale: u32, y_scale: u32) -> (i32, i32) {
@@ -553,6 +555,7 @@ impl Scene {
             potions: vec![],
             characters: vec![],
             particles: vec![],
+            collectables: vec![],
             collision_map: CollisionTree::new(world_min, world_min, world_width as u32, world_width as u32),
             rubble_map: CollisionTree::new(world_min, world_min, world_width as u32, world_width as u32),
             next_id: 0,
@@ -560,6 +563,7 @@ impl Scene {
             foreground_map: CollisionTree::new(world_min, world_min, world_width as u32, world_width as u32),
             background_map: CollisionTree::new(world_min, world_min, world_width as u32, world_width as u32),
             tile_queue: IndexSet::default(),
+            score: 0,
         }
     }
 
@@ -567,6 +571,12 @@ impl Scene {
         let id = self.next_id;
         self.next_id += 1;
         self.sprites.insert(id, sprite);
+        id
+    }
+
+    fn add_collectable(&mut self, sprite: Sprite) -> usize {
+        let id = self.add_sprite(sprite);
+        self.collectables.push(id);
         id
     }
 
@@ -775,6 +785,7 @@ impl Scene {
 
         let mut drinkers = vec![];
         let mut consumed = HashSet::default();
+        let mut collected = HashSet::default();
         for character_id in &self.characters {
             let character = &self.sprites[character_id];
             for (potion_id, potion_type) in &self.potions {
@@ -787,11 +798,26 @@ impl Scene {
                     drinkers.push((*character_id, *potion_type));
                 }
             }
+            for collectable_id in &self.collectables{
+                if collected.contains(collectable_id) {
+                    continue;
+                }
+                let collectable = &self.sprites[collectable_id];
+                if character.overlap(collectable) {
+                    collected.insert(*collectable_id);
+                }
+            }
         }
         for potion_id in consumed {
             self.potions.retain(|(id, _)| *id != potion_id);
             self.sprites.remove(&potion_id);
             self.sprite_cache.remove(&potion_id);
+        }
+        for collectable_id in collected {
+            self.collectables.retain(|id| *id != collectable_id);
+            self.sprites.remove(&collectable_id);
+            self.sprite_cache.remove(&collectable_id);
+            self.score += 1;
         }
         let mut new_sprites = vec![];
         for (sprite_id, potion_type) in drinkers {
@@ -1064,6 +1090,8 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
 
             if group.name == "player" || group.name == "test_player" {
                 player_id = Some(scene.add_character(Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, x_scale, y_scale, Color::BLUE)));
+            } else if group.name == "collectable" {
+                    scene.add_collectable(Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, x_scale, y_scale, Color::from_rgba(219, 242, 40, 1.0)).maybe_flip(flipped));
             } else if group.name == "objects" {
                 let (potion_type, color) = if object.properties.contains_key("x_absolute") || object.properties.contains_key("y_absolute") {
                     let x_absolute = if let Some(v) = object.properties.get("x_absolute") {
