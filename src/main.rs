@@ -1242,21 +1242,21 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
                 },
                 Event::KeyboardInput(e) => {
                     match e.key() {
-                        Key::Right => {
+                        Key::Right | Key::D => {
                             if e.is_down() {
                                 moving_right = true;
                             } else {
                                 moving_right = false;
                             }
                         },
-                        Key::Left => {
+                        Key::Left | Key::A => {
                             if e.is_down() {
                                 moving_left = true;
                             } else {
                                 moving_left = false;
                             }
                         },
-                        Key::Up => {
+                        Key::Up | Key::W => {
                             if e.is_down() {
                                 if player.ground_contact {
                                     player.jumping = true;
@@ -1267,18 +1267,6 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
                                     player.velocity.y = player.velocity.y.max(-2.0);
                                 } 
 
-                            }
-                        },
-                        Key::A => {
-                            if e.is_down() {
-                                player.x_scale += 1;
-                                player.y_scale += 1;
-                            }
-                        },
-                        Key::O => {
-                            if e.is_down() {
-                                player.x_scale -= 1;
-                                player.y_scale -= 1;
                             }
                         },
                         _ => (),
