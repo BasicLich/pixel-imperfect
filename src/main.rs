@@ -7,7 +7,7 @@ use image::GenericImageView;
 use quicksilver::{
     geom::{Rectangle, Vector},
     graphics::{Color, Graphics, Image, PixelFormat,},
-    input::{Event, Key},
+    input::{Event, Key, GamepadAxis, GamepadButton},
     Input, Window, Result, Settings, run,
     Timer,
 };
@@ -489,7 +489,7 @@ impl CollisionTree {
     }
 }
 
-const TILE_SIZE: u32 = 64;
+const TILE_SIZE: u32 = 256;
 
 struct Scene {
     sprites: HashMap<usize, Sprite>,
@@ -1187,14 +1187,59 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
         }
         did_work
     };
+    /*
     for _ in 0..20 {
         step_cache_warmer(&mut scene, &mut gfx, camera_scale);
     }
+    */
     loop {
-
         while let Some(e) = input.next_event().await {
             let player = scene.sprites.get_mut(&player_id).unwrap();
             match e {
+                Event::GamepadAxis(e) => {
+                    match e.axis() {
+                        GamepadAxis::LeftStickX | GamepadAxis::RightStickX => {
+                            if e.value() > 0.5 {
+                               moving_right = true;
+                                moving_left = false;
+                            } else if e.value() < -0.5 {
+                                moving_left = true;
+                                moving_right = false;
+                            } else {
+                                moving_right = false;
+                                moving_left = false;
+                            }
+                        },
+                        _ => (),
+                    }
+                },
+                Event::GamepadButton(e) => {
+                    match e.button() {
+                        GamepadButton::South => {
+                            if e.is_down() {
+                                if player.ground_contact {
+                                    player.jumping = true;
+                                    player.velocity.y = -80.0 / FPS;
+                                }
+                            }
+                        },
+                        GamepadButton::DPadLeft => {
+                            if e.is_down() {
+                                moving_left = true;
+                            } else {
+                                moving_left = false;
+                            }
+                        },
+                        GamepadButton::DPadRight => {
+                            if e.is_down() {
+                                moving_right = true;
+                            } else {
+                                moving_right = false;
+                            }
+                        },
+                        _ => (),
+                    }
+                },
                 Event::KeyboardInput(e) => {
                     match e.key() {
                         Key::Right => {
