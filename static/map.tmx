@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<map version="1.4" tiledversion="1.4.2" orientation="orthogonal" renderorder="right-down" width="10000" height="10000" tilewidth="16" tileheight="16" infinite="0" nextlayerid="11" nextobjectid="1364">
+<map version="1.4" tiledversion="1.4.2" orientation="orthogonal" renderorder="right-down" width="10000" height="10000" tilewidth="16" tileheight="16" infinite="0" nextlayerid="11" nextobjectid="1371">
  <tileset firstgid="1" name="monochrome_transparent_packed" tilewidth="16" tileheight="16" tilecount="1056" columns="48">
   <image source="monochrome_transparent_packed.png" width="768" height="352"/>
  </tileset>
@@ -584,13 +584,7 @@
   <object id="906" gid="650" x="4375" y="4304" width="64" height="32"/>
   <object id="907" gid="650" x="4375" y="4335" width="64" height="32"/>
  </objectgroup>
- <objectgroup id="8" name="terrain-small" locked="1">
-  <object id="697" gid="665" x="5667" y="6955" width="32" height="32"/>
-  <object id="698" gid="665" x="5667" y="6994" width="32" height="32"/>
-  <object id="699" gid="665" x="5731" y="6976" width="32" height="32"/>
-  <object id="748" gid="665" x="5476" y="6699" width="32" height="32"/>
-  <object id="749" gid="665" x="5476" y="6738" width="32" height="32"/>
-  <object id="750" gid="665" x="5476" y="6661" width="32" height="32"/>
+ <objectgroup id="8" name="terrain-small">
   <object id="793" gid="146" x="5160" y="6762" width="32" height="32"/>
   <object id="797" gid="55" x="4810" y="4073" width="16" height="16"/>
   <object id="798" gid="55" x="4602" y="4076" width="48" height="48"/>
@@ -637,8 +631,13 @@
   <object id="900" gid="686" x="4351" y="4149" width="16" height="16"/>
   <object id="901" gid="588" x="4309" y="4177" width="16" height="16"/>
   <object id="902" gid="782" x="4309" y="4163" width="16" height="16"/>
+  <object id="1364" gid="215" x="5474" y="6660" width="32" height="32"/>
+  <object id="1366" gid="215" x="5473" y="6705" width="32" height="32"/>
+  <object id="1368" gid="215" x="5719" y="6968" width="32" height="32"/>
+  <object id="1369" gid="2147483863" x="5675" y="6994" width="32" height="32"/>
+  <object id="1370" gid="2147483863" x="5676" y="6949" width="32" height="32"/>
  </objectgroup>
- <objectgroup id="4" name="objects" tintcolor="#ff0000">
+ <objectgroup id="4" name="objects" locked="1" tintcolor="#ff0000">
   <object id="689" gid="658" x="5272" y="6773" width="16" height="16">
    <properties>
     <property name="x_delta" type="int" value="1"/>

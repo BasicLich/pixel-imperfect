@@ -99,6 +99,22 @@ impl Sprite {
         }
     }
 
+    fn maybe_flip(mut self, flip: bool) -> Self {
+        if flip {
+            let mut collider = [false; SPRITE_WIDTH*SPRITE_WIDTH];
+            for x in 0..SPRITE_WIDTH {
+                for y in 0..SPRITE_WIDTH {
+                    let src_i = x + y * SPRITE_WIDTH;
+                    let dst_i = (SPRITE_WIDTH - x - 1) + y * SPRITE_WIDTH;
+                    collider[dst_i] = self.collider[src_i];
+                }
+            }
+            self.collider = collider;
+        }
+
+        self
+    }
+
     fn quarter(self) -> Vec<Self> {
         let Self {
             is_player,
@@ -862,10 +878,10 @@ impl Scene {
     fn draw(&mut self, gfx: &mut Graphics, x: i32, y: i32, width: u32, height: u32, scale: f32) {
         let pwidth = width;
         let pheight = height;
+        let x = x - (width as f32 * scale * 0.5) as i32;
+        let y = y - (height as f32 * scale * 0.5) as i32;
         let width = (width as f32 * scale) as u32;
         let height = (height as f32 * scale) as u32;
-        let x = x - width as i32 / 2;
-        let y = y - height as i32 / 2;
 
         let mut foreground_tiles = vec![];
         let mut terrain_tiles = vec![];
@@ -1009,8 +1025,10 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
             let y_scale = (object.height / 16.0) as u32;
             assert_eq!(x_scale as f32 * 16.0, object.width, "badly scaled sprite {} in {}", object.id, group.name);
             assert_eq!(y_scale as f32 * 16.0, object.height);
-            let ty = (object.gid - 1) / 48;
-            let tx = (object.gid - 1) - ty as u32 * 48;
+            let flipped = object.gid & 0x80000000 != 0;
+            let gid = object.gid & !0x80000000;
+            let ty = (gid - 1) / 48;
+            let tx = (gid - 1) - ty as u32 * 48;
 
             let preload = if let Some(v) = object.properties.get("preload") {
                 match v {
@@ -1054,24 +1072,24 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
                 scene.add_potion(Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, x_scale, y_scale, if x_delta > 0 || y_delta > 0 { Color::RED } else { Color::BLUE }), x_delta, y_delta);
             } else if group.name.starts_with("terrain") {
                 if preload {
-                    scene.add_terrain(&Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, x_scale, y_scale, Color::RED));
+                    scene.add_terrain(&Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, x_scale, y_scale, Color::RED).maybe_flip(flipped));
                 } else {
-                    terrain_chunks.push(TerrainChunk::Terrain(Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, x_scale, y_scale, Color::RED)));
+                    terrain_chunks.push(TerrainChunk::Terrain(Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, x_scale, y_scale, Color::RED).maybe_flip(flipped)));
                 }
             } else if group.name.starts_with("negative-terrain") {
                 //terrain_locations.insert((object.x as i32 / TILE_SIZE as i32, (object.y - object.height) as i32 / TILE_SIZE as i32));
-                negative_terrain.push(Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, x_scale, y_scale, Color::RED));
+                negative_terrain.push(Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, x_scale, y_scale, Color::RED).maybe_flip(flipped));
             } else if group.name == "background" {
                 if preload {
-                    scene.add_background(&Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, x_scale, y_scale, Color::RED));
+                    scene.add_background(&Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, x_scale, y_scale, Color::RED).maybe_flip(flipped));
                 } else {
-                    terrain_chunks.push(TerrainChunk::Background(Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, x_scale, y_scale, Color::RED)));
+                    terrain_chunks.push(TerrainChunk::Background(Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, x_scale, y_scale, Color::RED).maybe_flip(flipped)));
                 }
             } else if group.name == "foreground" {
                 if preload {
-                    scene.add_foreground(&Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, x_scale, y_scale, Color::RED));
+                    scene.add_foreground(&Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, x_scale, y_scale, Color::RED).maybe_flip(flipped));
                 } else {
-                    terrain_chunks.push(TerrainChunk::Foreground(Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, x_scale, y_scale, Color::RED)));
+                    terrain_chunks.push(TerrainChunk::Foreground(Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, x_scale, y_scale, Color::RED).maybe_flip(flipped)));
                 }
             }
         }
@@ -1324,9 +1342,13 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
         step_cache_warmer(&mut scene, &mut gfx, camera_scale);
         if draw_timer.exhaust().is_some() {
             let player = scene.sprites.get_mut(&player_id).unwrap();
-            camera.x = camera.x * 0.9 + (player.loc.x)*0.1;
-            camera.y = camera.y * 0.9 + (player.loc.y) *0.1;
-            camera_scale = camera_scale * 0.9 + player.x_scale.max(player.y_scale).min(30) as f32 * 0.1;
+            if camera.distance(player.loc) > player.x_scale.max(player.y_scale) as f32 * 10.0 {
+                camera.x = camera.x * 0.9 + (player.loc.x)*0.1;
+                camera.y = camera.y * 0.9 + (player.loc.y) *0.1;
+            }
+            if (camera_scale - player.x_scale.max(player.y_scale).min(30) as f32).abs() / camera_scale > 0.1 {
+                camera_scale = camera_scale * 0.9 + player.x_scale.max(player.y_scale).min(30) as f32 * 0.1;
+            }
             gfx.clear(Color::BLACK);
             let scale = if camera_scale > 8.0 {
                 (camera_scale / 8.0) as f32
