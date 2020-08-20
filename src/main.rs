@@ -675,32 +675,11 @@ impl Scene {
                                     if self.rubble_map.check_rect(x, y, sprite.x_scale, sprite.y_scale) {
                                         in_rubble = true;
                                     } else if self.collision_map.check_rect(x, y, sprite.x_scale, sprite.y_scale) {
-                                        if sprite.y_scale >= 80 && sprite.velocity.y < 0.0 {
-                                            self.collision_map.remove_rect(x, y, sprite.x_scale, sprite.y_scale);
-                                            self.foreground_map.remove_rect(x, y, sprite.x_scale, sprite.y_scale);
-                                            if new_sprites.len() + self.particles.len() < 0 {
-                                                let mut collider = [false; SPRITE_WIDTH*SPRITE_WIDTH];
-                                                collider[0] = true;
-                                                let mut new_sprite = Sprite::from_collider(collider, x as f32, y as f32, sprite.x_scale, sprite.y_scale, TERRAIN_COLOR);
-                                                new_sprite.velocity = Vector::new(-0.5, 0.0);
-                                                new_sprites.push(new_sprite);
-                                            }
-                                            for xx in (sprite.loc.x as i32+ dx as i32 * sprite.x_scale as i32)/TILE_SIZE as i32..(sprite.loc.x as i32+dx as i32*sprite.x_scale as i32+sprite.x_scale as i32)/TILE_SIZE as i32 {
-                                                for yy in (sprite.loc.y as i32+ dy as i32 * sprite.y_scale as i32)/TILE_SIZE as i32..(sprite.loc.y as i32+dy as i32*sprite.y_scale as i32+sprite.y_scale as i32)/TILE_SIZE as i32 {
-                                                    self.tile_cache.remove(&(xx / TILE_SIZE as i32, yy / TILE_SIZE as i32));
-                                                    self.tile_queue.insert((0, xx/TILE_SIZE as i32, yy/TILE_SIZE as i32));
-                                                    self.tile_queue.insert((1, xx/TILE_SIZE as i32, yy/TILE_SIZE as i32));
-                                                    self.tile_queue.insert((2, xx/TILE_SIZE as i32, yy/TILE_SIZE as i32));
-                                                }
-                                            }
-                                            vy = vy - step_y as i32;
-                                        } else {
                                             if vx.abs() >= 1 {
                                                 blocked_x = true;
                                             } else {
                                                 blocked_y = true;
                                             }
-                                        }
                                         break 'outer;
                                     }
                                 }
@@ -838,7 +817,7 @@ impl Scene {
             self.sprite_cache.remove(&potion_id);
         }
         if start_end {
-            self.potions.iter_mut().for_each(|(_, pt, _)| *pt = PotionType::Relative(20, 20));
+            self.potions.iter_mut().for_each(|(_, pt, _)| *pt = PotionType::Absolute(MAX_SCALE, MAX_SCALE));
         }
         for collectable_id in collected {
             self.collectables.retain(|id| *id != collectable_id);
@@ -899,8 +878,12 @@ impl Scene {
                 if x_delta > 0 || y_delta > 0 {
                     let cx = sprite.loc.x + (SPRITE_WIDTH * sprite.x_scale as usize) as f32 / 2.0;
                     let cy = sprite.loc.y + (SPRITE_WIDTH * sprite.y_scale as usize) as f32 / 2.0;
-                    for dx in 0..SPRITE_WIDTH {
-                        for dy in -1..SPRITE_WIDTH as i32-1 {
+                    let shape:Vec<_> = if sprite.y_scale < MAX_SCALE {
+                        (0..SPRITE_WIDTH).flat_map(|x| (-1..SPRITE_WIDTH-1).map(|y| (*x, *y)))
+                    } else {
+                        (0..SPRITE_WIDTH).flat_map(|x| (0..SPRITE_WIDTH).map(|y| (*x, *y)))
+                    }.collect();
+                    for (dx, dy) in shape {
                             if true {
                                 let x = sprite.loc.x as i32 + dx as i32 * sprite.x_scale as i32;
                                 let y = sprite.loc.y as i32 + dy as i32 * sprite.y_scale as i32;
@@ -937,7 +920,6 @@ impl Scene {
                                 }
                             }
                         }
-                    }
                 }
             }
         }
