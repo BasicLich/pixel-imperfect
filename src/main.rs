@@ -1,6 +1,7 @@
 #![feature(clamp)]
-use indexmap::{IndexMap, IndexSet};
 
+use indexmap::IndexSet;
+use fnv::{FnvHashMap as HashMap, FnvHashSet as HashSet};
 use image::GenericImageView;
 
 use quicksilver::{
@@ -28,7 +29,7 @@ const FPS: f32 = 60.0;
 fn main() {
     run(
         Settings {
-            title: "Square Example",
+            title: "Pixel Game!",
             size: Vector::new(1920.0, 1080.0),
             fullscreen: true,
             ..Settings::default()
@@ -98,6 +99,53 @@ impl Sprite {
             pending_y_scale: 0,
             sleep_timer: 0.0,
         }
+    }
+
+    fn quarter(self) -> Vec<Self> {
+        let Self {
+            is_player,
+            collider,
+            loc,
+            x_scale,
+            y_scale,
+            velocity,
+            ground_contact,
+            jumping,
+            vy_slop,
+            color,
+            scale_timer,
+            pending_x_scale,
+            pending_y_scale,
+            sleep_timer,
+        } = self;
+        let new_x_scale = x_scale/2;
+        let new_y_scale = y_scale/2;
+        [(0,0), (SPRITE_WIDTH/2-1,0), (0,SPRITE_WIDTH/2-1), (SPRITE_WIDTH/2-1,SPRITE_WIDTH/2-1)].iter().map(|(dx,dy)| {
+            let mut new_collider = [false; SPRITE_WIDTH*SPRITE_WIDTH];
+            for x in 0..SPRITE_WIDTH {
+                for y in 0..SPRITE_WIDTH {
+                    let src_i = x / 2 + dx + (y/2 + dy) * SPRITE_WIDTH;
+                    let dst_i = x + y * SPRITE_WIDTH;
+                    new_collider[dst_i] = collider[src_i];
+                }
+            }
+            Self {
+                is_player,
+                collider: new_collider,
+                loc: Vector::new(loc.x+*dx as f32 *x_scale as f32, loc.y+*dy as f32*y_scale as f32),
+                x_scale: new_x_scale,
+                y_scale: new_y_scale,
+                velocity,
+                ground_contact,
+                jumping,
+                vy_slop,
+                color,
+                scale_timer,
+                pending_x_scale,
+                pending_y_scale,
+                sleep_timer,
+            }
+        }).collect()
     }
 
     fn overlap(&self, other: &Sprite) -> bool {
@@ -201,20 +249,6 @@ impl CollisionTree {
                         CollisionTree::new(self.x + self.width as i32 / 2, self.y + self.height as i32  / 2, self.width / 2, self.height / 2),
                         CollisionTree::new(self.x, self.y + self.height as i32 / 2, self.width / 2, self.width / 2),
                     ]);
-                    if let Some(grid) = self.grid.take() {
-                        for (i, v) in grid.iter().enumerate() {
-                            if *v {
-                                let lx = i as i32 % LEAF_SIZE as i32;
-                                let ly = i as i32 / LEAF_SIZE as i32;
-                                for child in self.children.as_mut().unwrap() {
-                                    if x + lx >= child.x && x + lx < child.x+child.width as i32 && y  + ly >= child.y && y + ly < child.y + child.height as i32 {
-                                        child.insert(x + lx, y + ly);
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
                     for child in self.children.as_mut().unwrap().iter_mut() {
                         if x >= child.x && x < child.x+child.width as i32 && y >= child.y && y < child.y + child.height as i32 {
                             let e = child.insert(x, y);
@@ -250,9 +284,8 @@ impl CollisionTree {
                 if sprite.collider[i] {
                     let rx = x as i32 * sprite.x_scale as i32 + sprite.loc.x as i32;
                     let ry = y as i32 * sprite.y_scale as i32 + sprite.loc.y as i32;
-                    for dx in 0..sprite.x_scale as i32 {
-                        for dy in 0..sprite.y_scale as i32 {
-                            self.insert(rx + dx, ry + dy);
+                    if let Ok(x) = self.insert_rect(rx, ry, sprite.x_scale, sprite.y_scale) {
+                        if x > 0 {
                         }
                     }
                 }
@@ -295,6 +328,77 @@ impl CollisionTree {
             }
         }
         false
+    }
+
+    fn insert_rect(&mut self, x: i32, y: i32, width: u32, height: u32) -> std::result::Result<u32, ()> {
+        if x + width as i32 <= self.x || x > self.x + self.width as i32 || y + height as i32 <= self.y || y > self.y + self.height as i32 {
+            return Err(());
+        }
+
+        if x <= self.x && x + width as i32 > self.x+self.width as i32 && y <= self.y && y + height as i32 > self.y+self.height as i32 {
+            let change = self.free_pixels;
+            self.free_pixels = 0;
+            if self.width * self.height <= (LEAF_SIZE*LEAF_SIZE) as u32 {
+                self.grid.replace([true; LEAF_SIZE*LEAF_SIZE]);
+            } else {
+                if self.children.is_none() {
+                    self.children = Some(vec![
+                        CollisionTree::new(self.x, self.y, self.width / 2, self.height / 2),
+                        CollisionTree::new(self.x + self.width as i32 / 2, self.y, self.width / 2, self.height / 2),
+                        CollisionTree::new(self.x + self.width as i32 / 2, self.y + self.height as i32  / 2, self.width / 2, self.height / 2),
+                        CollisionTree::new(self.x, self.y + self.height as i32 / 2, self.width / 2, self.width / 2),
+                    ]);
+                }
+                if let Some(children) = self.children.as_mut() {
+                    for child in children {
+                        child.insert_rect(x, y, width, height);
+                    }
+                }
+            }
+            return Ok(change);
+        }
+
+        if self.width * self.height <= (LEAF_SIZE*LEAF_SIZE) as u32 {
+            if self.grid.is_none() {
+                self.grid.replace([false; LEAF_SIZE*LEAF_SIZE]);
+            }
+            if let Some(grid) = &mut self.grid {
+                let mut inserted = 0;
+                for x in self.x.max(x)..(self.x+self.width as i32).min(x+width as i32) {
+                    for y in self.y.max(y)..(self.y+self.height as i32).min(y+height as i32) {
+                        let x = x - self.x;
+                        let y = y - self.y;
+                        let i = (x + y * self.width as i32) as usize;
+                        if !grid[i] {
+                            self.free_pixels -= 1;
+                            inserted += 1;
+                            grid[i] = true;
+                        }
+                    }
+                }
+                return Ok(inserted);
+            }
+        } else {
+            let mut inserted = 0;
+            if self.children.is_none() {
+                self.children = Some(vec![
+                    CollisionTree::new(self.x, self.y, self.width / 2, self.height / 2),
+                    CollisionTree::new(self.x + self.width as i32 / 2, self.y, self.width / 2, self.height / 2),
+                    CollisionTree::new(self.x + self.width as i32 / 2, self.y + self.height as i32  / 2, self.width / 2, self.height / 2),
+                    CollisionTree::new(self.x, self.y + self.height as i32 / 2, self.width / 2, self.width / 2),
+                ]);
+            }
+            if let Some(children) = self.children.as_mut() {
+                for child in children {
+                    if let Ok(change) = child.insert_rect(x, y, width, height) {
+                        inserted += change;
+                    }
+                }
+            }
+            self.free_pixels -= inserted;
+            return Ok(inserted);
+        }
+        unreachable!();
     }
 
     fn remove_rect(&mut self, x: i32, y: i32, width: u32, height: u32) -> (bool, u32) {
@@ -385,22 +489,21 @@ impl CollisionTree {
     }
 }
 
-const TILE_SIZE: u32 = 128;
+const TILE_SIZE: u32 = 64;
 
 struct Scene {
-    sprites: IndexMap<usize, Sprite>,
-    sprite_cache: IndexMap<usize, Image>,
+    sprites: HashMap<usize, Sprite>,
+    sprite_cache: HashMap<usize, Image>,
     potions: Vec<(usize, i32, i32)>,
     characters: Vec<usize>,
     particles: Vec<usize>,
     collision_map: CollisionTree,
     rubble_map: CollisionTree,
     next_id: usize,
-    tile_cache: IndexMap<(i32, i32), Option<Image>>,
     foreground_map: CollisionTree,
     background_map: CollisionTree,
-    foreground_tile_cache: IndexMap<(i32, i32), Option<Image>>,
-    background_tile_cache: IndexMap<(i32, i32), Option<Image>>,
+    tile_cache: HashMap<(i32, i32), ((Option<Vec<u8>>, Option<Image>), (Option<Vec<u8>>,  Option<Image>), (Option<Vec<u8>>, Option<Image>))>,
+    tile_queue: IndexSet<(u32, i32, i32)>,
 }
 
 fn to_scale(x: i32, y: i32, x_scale: u32, y_scale: u32) -> (i32, i32) {
@@ -419,19 +522,15 @@ impl Scene {
     fn new() -> Self {
         let world_min = -10000;
         let world_width = 40000;
-        let mut tile_cache = IndexMap::new();
-        let mut foreground_tile_cache = IndexMap::new();
-        let mut background_tile_cache = IndexMap::new();
+        let mut tile_cache = HashMap::default();
         for x in world_min/TILE_SIZE as i32..(world_min+world_width)/TILE_SIZE as i32 {
             for y in world_min/TILE_SIZE as i32..(world_min+world_width)/TILE_SIZE as i32 {
-                tile_cache.insert((x, y), None);
-                foreground_tile_cache.insert((x, y), None);
-                background_tile_cache.insert((x, y), None);
+                tile_cache.insert((x, y), ((None, None), (None, None), (None, None)));
             }
         }
         Self {
-            sprites: IndexMap::new(),
-            sprite_cache: IndexMap::new(),
+            sprites: HashMap::default(),
+            sprite_cache: HashMap::default(),
             potions: vec![],
             characters: vec![],
             particles: vec![],
@@ -441,8 +540,7 @@ impl Scene {
             tile_cache,
             foreground_map: CollisionTree::new(world_min, world_min, world_width as u32, world_width as u32),
             background_map: CollisionTree::new(world_min, world_min, world_width as u32, world_width as u32),
-            foreground_tile_cache,
-            background_tile_cache,
+            tile_queue: IndexSet::default(),
         }
     }
 
@@ -475,7 +573,8 @@ impl Scene {
         self.collision_map.add_sprite(sprite);
         for x in sprite.loc.x as i32..sprite.loc.x as i32 + SPRITE_WIDTH as i32 * sprite.x_scale as i32 {
             for y in sprite.loc.y as i32..sprite.loc.y as i32 + SPRITE_WIDTH as i32 * sprite.y_scale as i32 {
-                self.tile_cache.remove(&(x / TILE_SIZE as i32, y / TILE_SIZE as i32));
+                self.tile_queue.insert((1, x/TILE_SIZE as i32, y/TILE_SIZE as i32));
+                self.tile_cache.entry((x / TILE_SIZE as i32, y / TILE_SIZE as i32)).or_default().1 = (None, None);
             }
         }
     }
@@ -493,7 +592,8 @@ impl Scene {
         self.foreground_map.add_sprite(sprite);
         for x in sprite.loc.x as i32..sprite.loc.x as i32 + SPRITE_WIDTH as i32 * sprite.x_scale as i32 {
             for y in sprite.loc.y as i32..sprite.loc.y as i32 + SPRITE_WIDTH as i32 * sprite.y_scale as i32 {
-                self.foreground_tile_cache.remove(&(x / TILE_SIZE as i32, y / TILE_SIZE as i32));
+                self.tile_cache.entry((x / TILE_SIZE as i32, y / TILE_SIZE as i32)).or_default().2 = (None, None);
+                self.tile_queue.insert((2, x/TILE_SIZE as i32, y/TILE_SIZE as i32));
             }
         }
     }
@@ -502,13 +602,17 @@ impl Scene {
         self.background_map.add_sprite(sprite);
         for x in sprite.loc.x as i32..sprite.loc.x as i32 + SPRITE_WIDTH as i32 * sprite.x_scale as i32 {
             for y in sprite.loc.y as i32..sprite.loc.y as i32 + SPRITE_WIDTH as i32 * sprite.y_scale as i32 {
-                self.background_tile_cache.remove(&(x / TILE_SIZE as i32, y / TILE_SIZE as i32));
+                self.tile_cache.entry((x / TILE_SIZE as i32, y / TILE_SIZE as i32)).or_default().0 = (None, None);
+                self.tile_queue.insert((0, x/TILE_SIZE as i32, y/TILE_SIZE as i32));
             }
         }
     }
 
-    fn step_physics(&mut self) {
+    fn step_physics(&mut self, camera: Vector, camera_scale: f32) {
         for sprite in self.sprites.values_mut() {
+            if camera.distance(sprite.loc) > 1920.0 / camera_scale {
+                continue
+            }
             if sprite.is_player {
                 // Collision resolution
                 let mut x_dir = 0;
@@ -616,7 +720,7 @@ impl Scene {
             }
         }
 
-        let mut to_remove = IndexSet::new();
+        let mut to_remove = HashSet::default();
         for particle_id in &self.particles {
             let sprite = &self.sprites[particle_id];
             if sprite.loc.y > 30000.0 {
@@ -636,7 +740,8 @@ impl Scene {
                                     let y = sprite.loc.y as i32 + y as i32 * sprite.y_scale as i32 + dy as i32;
                                     self.collision_map.insert(x ,y);
                                     self.rubble_map.insert(x, y);
-                                    self.tile_cache.remove(&(x/ TILE_SIZE as i32, y / TILE_SIZE as i32));
+                                    self.tile_cache.entry((x / TILE_SIZE as i32, y / TILE_SIZE as i32)).or_default().1 = (None, None);
+                                    self.tile_queue.insert((1, x/TILE_SIZE as i32, y/TILE_SIZE as i32));
                                 }
                             }
                         }
@@ -648,7 +753,7 @@ impl Scene {
         self.sprites.retain(|pid, _| !to_remove.contains(pid));
 
         let mut drinkers = vec![];
-        let mut consumed = IndexSet::new();
+        let mut consumed = HashSet::default();
         for character_id in &self.characters {
             let character = &self.sprites[character_id];
             for (potion_id, x_delta, y_delta) in &self.potions {
@@ -714,7 +819,8 @@ impl Scene {
                                             for yy in 0..sprite.y_scale {
                                                 let cx = sprite.loc.x as i32 + dx as i32 * sprite.x_scale as i32 + xx as i32;
                                                 let cy = sprite.loc.y as i32 + dy as i32 * sprite.y_scale as i32 + yy as i32;
-                                                self.foreground_tile_cache.remove(&(cx / TILE_SIZE as i32, cy / TILE_SIZE as i32));
+                                                self.tile_cache.entry((cx / TILE_SIZE as i32, cy / TILE_SIZE as i32)).or_default().1 = (None, None);
+                                                self.tile_queue.insert((2, cx/TILE_SIZE as i32, cy/TILE_SIZE as i32));
                                             }
                                         }
                                     }
@@ -730,6 +836,9 @@ impl Scene {
                                                 let cx = sprite.loc.x as i32 + dx as i32 * sprite.x_scale as i32 + xx as i32;
                                                 let cy = sprite.loc.y as i32 + dy as i32 * sprite.y_scale as i32 + yy as i32;
                                                 self.tile_cache.remove(&(cx / TILE_SIZE as i32, cy / TILE_SIZE as i32));
+                                                self.tile_queue.insert((0, cx/TILE_SIZE as i32, cy/TILE_SIZE as i32));
+                                                self.tile_queue.insert((1, cx/TILE_SIZE as i32, cy/TILE_SIZE as i32));
+                                                self.tile_queue.insert((2, cx/TILE_SIZE as i32, cy/TILE_SIZE as i32));
                                             }
                                         }
 
@@ -757,35 +866,46 @@ impl Scene {
         let x = x - width as i32 / 2;
         let y = y - height as i32 / 2;
 
+        let mut foreground_tiles = vec![];
+        let mut terrain_tiles = vec![];
+        let mut background_tiles = vec![];
+
         for xx in x/TILE_SIZE as i32 - 1..(x+width as i32)/TILE_SIZE as i32 + 1 {
             for yy in y/TILE_SIZE as i32 - 1..(y+height as i32) / TILE_SIZE as i32 + 1 {
-                if !self.background_tile_cache.contains_key(&(xx, yy)) {
-                    let mut tile = vec![0; (TILE_SIZE*TILE_SIZE*4) as usize];
-                    for dx in 0..TILE_SIZE {
-                        for dy in 0..TILE_SIZE {
-                            if self.background_map.check_point(xx * TILE_SIZE as i32+ dx as i32, yy * TILE_SIZE as i32 + dy as i32) {
-                                let i = (dx + dy * TILE_SIZE) as usize * 4;
-                                tile[i] = (BACKGROUND_COLOR.r * 255.0).clamp(0.0, 255.0) as u8;
-                                tile[i+1] = (BACKGROUND_COLOR.g * 255.0).clamp(0.0, 255.0) as u8;
-                                tile[i+2] = (BACKGROUND_COLOR.b * 255.0).clamp(0.0, 255.0) as u8;
-                                tile[i+3] = 255;
-                            }
-                        }
-                    }
-                    let mut tile = Image::from_raw(
-                        gfx,
-                        Some(&tile),
-                        TILE_SIZE,
-                        TILE_SIZE,
-                        PixelFormat::RGBA,
-                    ).unwrap();
-                    tile.set_magnification(golem::TextureFilter::Nearest).unwrap();
-                    self.background_tile_cache.insert((xx, yy), Some(tile));
-                }
-                if let Some(Some(tile)) = self.background_tile_cache.get(&(xx, yy)) {
+                if let Some((background, terrain, foreground)) = self.tile_cache.get_mut(&(xx, yy)) {
                     let region = Rectangle::new(Vector::new(((xx*TILE_SIZE as i32 - x) as f32 / scale).floor(), ((yy*TILE_SIZE as i32 - y) as f32 / scale).floor()), (Vector::new((TILE_SIZE as f32 / scale).ceil(), (TILE_SIZE as f32 / scale).ceil())));
-                    gfx.draw_image(tile, region);
+                    for ((data, image), ref mut accumulator) in vec![
+                        (background, &mut background_tiles),
+                        (terrain, &mut terrain_tiles),
+                        (foreground, &mut foreground_tiles),
+                        ] {
+                            if let Some(tile) = image{
+                                accumulator.push((region, (xx, yy)));
+                            } else if let Some(data) = data {
+                                let mut tile = Image::from_raw(
+                                    gfx,
+                                    Some(data),
+                                    TILE_SIZE,
+                                    TILE_SIZE,
+                                    PixelFormat::RGBA,
+                                ).unwrap();
+                                tile.set_magnification(golem::TextureFilter::Nearest).unwrap();
+                                *image = Some(tile);
+                                accumulator.push((region, (xx, yy)));
+                            }
+                    }
                 }
+            }
+        }
+
+        for (r, t) in &background_tiles {
+            if let Some(((_, t), _, _)) = self.tile_cache.get(t) {
+                gfx.draw_image(t.as_ref().unwrap(), *r);
+            }
+        }
+        for (r, t) in &terrain_tiles {
+            if let Some((_, (_, t), _)) = self.tile_cache.get(t) {
+                gfx.draw_image(t.as_ref().unwrap(), *r);
             }
         }
 
@@ -828,71 +948,43 @@ impl Scene {
             }
         }
 
-
-        for xx in x/TILE_SIZE as i32 - 1..(x+width as i32)/TILE_SIZE as i32 + 1 {
-            for yy in y/TILE_SIZE as i32 - 1..(y+height as i32) / TILE_SIZE as i32 + 1 {
-                if !self.tile_cache.contains_key(&(xx, yy)) {
-                    let mut tile = vec![0; (TILE_SIZE*TILE_SIZE*4) as usize];
-                    for dx in 0..TILE_SIZE {
-                        for dy in 0..TILE_SIZE {
-                            if self.collision_map.check_point(xx * TILE_SIZE as i32+ dx as i32, yy * TILE_SIZE as i32 + dy as i32) {
-                                let i = (dx + dy * TILE_SIZE) as usize * 4;
-                                tile[i] = (TERRAIN_COLOR.r * 255.0).clamp(0.0, 255.0) as u8;
-                                tile[i+1] = (TERRAIN_COLOR.g * 255.0).clamp(0.0, 255.0) as u8;
-                                tile[i+2] = (TERRAIN_COLOR.b * 255.0).clamp(0.0, 255.0) as u8;
-                                tile[i+3] = 0xff;
-                            }
-                        }
-                    }
-                    let mut tile = Image::from_raw(
-                        gfx,
-                        Some(&tile),
-                        TILE_SIZE,
-                        TILE_SIZE,
-                        PixelFormat::RGBA,
-                    ).unwrap();
-                    tile.set_magnification(golem::TextureFilter::Nearest).unwrap();
-                    self.tile_cache.insert((xx, yy), Some(tile));
-                }
-                if let Some(Some(tile)) = self.tile_cache.get(&(xx, yy)) {
-                    let region = Rectangle::new(Vector::new(((xx*TILE_SIZE as i32 - x) as f32 / scale).floor(), ((yy*TILE_SIZE as i32 - y) as f32 / scale).floor()), Vector::new((TILE_SIZE as f32 / scale).ceil(), (TILE_SIZE as f32 / scale).ceil()));
-                    gfx.draw_image(tile, region);
-                }
+        for (r, t) in &foreground_tiles {
+            if let Some((_, _, (_, t))) = self.tile_cache.get(t) {
+                gfx.draw_image(t.as_ref().unwrap(), *r);
             }
         }
 
-        for xx in x/TILE_SIZE as i32 - 1..(x+width as i32)/TILE_SIZE as i32 + 1 {
-            for yy in y/TILE_SIZE as i32 - 1..(y+height as i32) / TILE_SIZE as i32 + 1 {
-                if !self.foreground_tile_cache.contains_key(&(xx, yy)) {
-                    let mut tile = vec![0; (TILE_SIZE*TILE_SIZE*4) as usize];
-                    for dx in 0..TILE_SIZE {
-                        for dy in 0..TILE_SIZE {
-                            if self.foreground_map.check_point(xx * TILE_SIZE as i32+ dx as i32, yy * TILE_SIZE as i32 + dy as i32) {
-                                let i = (dx + dy * TILE_SIZE) as usize * 4;
-                                tile[i] = (FOREGROUND_COLOR.r * 255.0).clamp(0.0, 255.0) as u8;
-                                tile[i+1] = (FOREGROUND_COLOR.g * 255.0).clamp(0.0, 255.0) as u8;
-                                tile[i+2] = (FOREGROUND_COLOR.b * 255.0).clamp(0.0, 255.0) as u8;
-                                tile[i+3] = 255;
-                            }
-                        }
-                    }
-                    let mut tile = Image::from_raw(
-                        gfx,
-                        Some(&tile),
-                        TILE_SIZE,
-                        TILE_SIZE,
-                        PixelFormat::RGBA,
-                    ).unwrap();
-                    tile.set_magnification(golem::TextureFilter::Nearest).unwrap();
-                    self.foreground_tile_cache.insert((xx, yy), Some(tile));
-                }
-                if let Some(Some(tile)) = self.foreground_tile_cache.get(&(xx, yy)) {
-                    let region = Rectangle::new(Vector::new(((xx*TILE_SIZE as i32 - x) as f32 / scale).floor(), ((yy*TILE_SIZE as i32 - y) as f32 / scale).floor()), Vector::new((TILE_SIZE as f32 / scale).ceil(), (TILE_SIZE as f32 / scale).ceil()));
-                    gfx.draw_image(tile, region);
-                }
-            }
-        }
+    }
+}
 
+enum TerrainChunk {
+    Foreground(Sprite),
+    Background(Sprite),
+    Terrain(Sprite),
+}
+impl TerrainChunk {
+    fn loc(&self) -> Vector {
+        match self {
+            TerrainChunk::Foreground(s) => s.loc,
+            TerrainChunk::Background(s) => s.loc,
+            TerrainChunk::Terrain(s) => s.loc,
+        }
+    }
+
+    fn pixel_count(&self) -> u32 {
+        match self {
+            TerrainChunk::Foreground(s) => s.x_scale * SPRITE_WIDTH as u32 + s.y_scale * SPRITE_WIDTH as u32,
+            TerrainChunk::Background(s) => s.x_scale * SPRITE_WIDTH as u32 + s.y_scale * SPRITE_WIDTH as u32,
+            TerrainChunk::Terrain(s) => s.x_scale * SPRITE_WIDTH as u32 + s.y_scale * SPRITE_WIDTH as u32,
+        }
+    }
+
+    fn quarter(self) -> Vec<Self> {
+        match self {
+            TerrainChunk::Foreground(s) => s.quarter().into_iter().map(|s| TerrainChunk::Foreground(s)).collect(),
+            TerrainChunk::Background(s) => s.quarter().into_iter().map(|s| TerrainChunk::Background(s)).collect(),
+            TerrainChunk::Terrain(s) => s.quarter().into_iter().map(|s| TerrainChunk::Terrain(s)).collect(),
+        }
     }
 }
 
@@ -903,7 +995,8 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
     let mut scene = Scene::new();
     let mut player_id = None;
     let mut negative_terrain = vec![];
-    let mut terrain_locations = IndexSet::new();
+    let mut terrain_locations: HashSet<(u32, i32, i32)> = HashSet::default();
+    let mut terrain_chunks = vec![];
     for group in &map.object_groups {
         if !group.visible {
             continue
@@ -915,6 +1008,15 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
             assert_eq!(y_scale as f32 * 16.0, object.height);
             let ty = (object.gid - 1) / 48;
             let tx = (object.gid - 1) - ty as u32 * 48;
+
+            let preload = if let Some(v) = object.properties.get("preload") {
+                match v {
+                    tiled::PropertyValue::BoolValue(v) => *v,
+                    _ => false,
+                }
+            } else {
+                false
+            };
 
 
             if group.name == "player" || group.name == "test_player" {
@@ -948,20 +1050,36 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
                 };
                 scene.add_potion(Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, x_scale, y_scale, if x_delta > 0 || y_delta > 0 { Color::RED } else { Color::BLUE }), x_delta, y_delta);
             } else if group.name.starts_with("terrain") {
-                terrain_locations.insert((object.x as i32 / TILE_SIZE as i32, (object.y - object.height) as i32 / TILE_SIZE as i32));
-                scene.add_terrain(&Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, x_scale, y_scale, Color::RED));
+                if preload {
+                    scene.add_terrain(&Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, x_scale, y_scale, Color::RED));
+                } else {
+                    terrain_chunks.push(TerrainChunk::Terrain(Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, x_scale, y_scale, Color::RED)));
+                }
             } else if group.name.starts_with("negative-terrain") {
-                terrain_locations.insert((object.x as i32 / TILE_SIZE as i32, (object.y - object.height) as i32 / TILE_SIZE as i32));
+                //terrain_locations.insert((object.x as i32 / TILE_SIZE as i32, (object.y - object.height) as i32 / TILE_SIZE as i32));
                 negative_terrain.push(Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, x_scale, y_scale, Color::RED));
             } else if group.name == "background" {
-                terrain_locations.insert((object.x as i32 / TILE_SIZE as i32, (object.y - object.height) as i32 / TILE_SIZE as i32));
-                scene.add_background(&Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, x_scale, y_scale, Color::RED));
+                if preload {
+                    scene.add_background(&Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, x_scale, y_scale, Color::RED));
+                } else {
+                    terrain_chunks.push(TerrainChunk::Background(Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, x_scale, y_scale, Color::RED)));
+                }
             } else if group.name == "foreground" {
-                terrain_locations.insert((object.x as i32 / TILE_SIZE as i32, (object.y - object.height) as i32 / TILE_SIZE as i32));
-                scene.add_foreground(&Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, x_scale, y_scale, Color::RED));
+                if preload {
+                    scene.add_foreground(&Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, x_scale, y_scale, Color::RED));
+                } else {
+                    terrain_chunks.push(TerrainChunk::Foreground(Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, x_scale, y_scale, Color::RED)));
+                }
             }
         }
     }
+    let mut terrain_chunks:Vec<_> = terrain_chunks.into_iter().flat_map(|c| {
+        let mut result = vec![c];
+        while result[0].pixel_count() > 160*160 {
+            result = result.into_iter().flat_map(|c| c.quarter()).collect();
+        }
+        result
+    }).collect();
     for terrain in negative_terrain {
         scene.clear_terrain(terrain);
     }
@@ -970,7 +1088,7 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
         scene.sprite_cache.insert(*sprite_id, sprite.image(&gfx));
     }
 
-    let mut terrain_locations: Vec<_> = terrain_locations.into_iter().map(|(x,y)| Vector::new(x as f32, y as f32)).collect();
+    let mut terrain_locations: Vec<_> = terrain_locations.into_iter().map(|(l, x,y)| (l, Vector::new(x as f32, y as f32))).collect();
 
     let player_id = player_id.unwrap();
 
@@ -978,7 +1096,7 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
     let mut camera = Vector::new(0.0, 0.0);
     let mut camera_scale = 8.0;
     {
-        let player = &mut scene.sprites[player_id];
+        let player = scene.sprites.get_mut(&player_id).unwrap();
         player.is_player = true;
         camera.x = player.loc.x;
         camera.y = player.loc.y;
@@ -987,49 +1105,93 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
         //player.collider[SPRITE_WIDTH-3 + 4 * SPRITE_WIDTH] = false;
     }
 
+
     let mut update_timer = Timer::time_per_second(FPS);
     let mut draw_timer = Timer::time_per_second(FPS);
     let mut moving_left = false;
     let mut moving_right = false;
-    loop {
-        {
-            if !terrain_locations.is_empty() {
-                let player_loc = scene.sprites[player_id].loc / TILE_SIZE as f32;
-                terrain_locations.sort_by_key(|t| (player_loc.distance(*t) * 10000.0) as i32);
-                let loc = terrain_locations.remove(0);
-                let x = loc.x as i32 / TILE_SIZE as i32;
-                let y = loc.y as i32 / TILE_SIZE as i32;
-                for (cache, map, color) in &mut [
-                     (&mut scene.foreground_tile_cache, &scene.foreground_map, FOREGROUND_COLOR),
-                     (&mut scene.background_tile_cache, &scene.background_map, BACKGROUND_COLOR),
-                     (&mut scene.tile_cache, &scene.collision_map, TERRAIN_COLOR),
-                  ] {
-                    if !cache.contains_key(&(x, y)) {
-                        let mut tile = vec![0; (TILE_SIZE*TILE_SIZE*4) as usize];
-                        for dx in 0..TILE_SIZE {
-                            for dy in 0..TILE_SIZE {
-                                if map.check_point(x * TILE_SIZE as i32+ dx as i32, y * TILE_SIZE as i32 + dy as i32) {
-                                    let i = (dx + dy * TILE_SIZE) as usize * 4;
-                                    tile[i] = (color.r * 255.0).clamp(0.0, 255.0) as u8;
-                                    tile[i+1] = (color.g * 255.0).clamp(0.0, 255.0) as u8;
-                                    tile[i+2] = (color.b * 255.0).clamp(0.0, 255.0) as u8;
-                                    tile[i+3] = 255;
-                                }
-                            }
-                        }
-                        let mut tile = Image::from_raw(
-                            &gfx,
-                            Some(&tile),
-                            TILE_SIZE,
-                            TILE_SIZE,
-                            PixelFormat::RGBA,
-                        ).unwrap();
-                        tile.set_magnification(golem::TextureFilter::Nearest).unwrap();
-                        cache.insert((x, y), Some(tile));
-                    }
-                  }
+
+    let mut step_cache_warmer = |scene: &mut Scene, gfx: &mut Graphics, camera_scale: f32| {
+        let mut did_work = false;
+        if !terrain_chunks.is_empty() {
+            let player_loc = scene.sprites[&player_id].loc;
+            terrain_chunks.sort_by_key(|c| (player_loc.distance(c.loc()) * 10000.0) as i32);
+            let mut pixel_budget = 512*512;
+            while pixel_budget > 0 && !terrain_chunks.is_empty() {
+                let chunk = terrain_chunks.pop().unwrap();
+                pixel_budget -= chunk.pixel_count();
+                match chunk {
+                    TerrainChunk::Foreground(s) => scene.add_foreground(&s),
+                    TerrainChunk::Background(s) => scene.add_background(&s),
+                    TerrainChunk::Terrain(s) => scene.add_terrain(&s),
+                }
+                did_work = true;
             }
         }
+        if !scene.tile_queue.is_empty() {
+            did_work = true;
+            let player_loc = scene.sprites[&player_id].loc / TILE_SIZE as f32;
+            let mut min_idx = 0;
+            let mut min_d = f32::INFINITY;
+            let mut crash_priority = vec![];
+            for (i, (_, x, y)) in scene.tile_queue.iter().enumerate() {
+                let d = player_loc.distance(Vector::new(*x as f32, *y as f32));
+                if d < (1300.0 * (camera_scale/8.0))/TILE_SIZE as f32 {
+                    crash_priority.push(i);
+                }
+                if d < min_d {
+                    min_d = d;
+                    min_idx = i;
+                }
+            }
+            if crash_priority.len() < 3 && !crash_priority.contains(&min_idx) {
+                crash_priority.push(min_idx);
+            }
+            /*
+            terrain_locations.sort_by_key(|t| (player_loc.distance(t.1) * 10000.0) as i32);
+            
+            if !terrain_chunks.is_empty() && (terrain_locations[0].1).distance(player_loc) > 1920.0/camera_scale {
+                return true
+            }
+            */
+            crash_priority.sort();
+            for i in crash_priority.into_iter().rev() {
+                let (layer, x, y) = scene.tile_queue.swap_remove_index(i).unwrap();
+                let e = {
+                    let o = scene.tile_cache.entry((x,y)).or_default();
+                    match layer {
+                        0 => &mut o.0,
+                        1 => &mut o.1,
+                        _ => &mut o.2
+                    }
+                };
+                let (map, color) = match layer {
+                    0 => (&mut scene.background_map, BACKGROUND_COLOR),
+                    1 => (&mut scene.collision_map, TERRAIN_COLOR),
+                    _ => (&mut scene.foreground_map, FOREGROUND_COLOR),
+                };
+                let tile = e.0.get_or_insert_with(|| vec![0; (TILE_SIZE*TILE_SIZE*4) as usize]);
+                for dx in 0..TILE_SIZE {
+                    for dy in 0..TILE_SIZE {
+                        if map.check_point(x * TILE_SIZE as i32+ dx as i32, y * TILE_SIZE as i32 + dy as i32) {
+                            let i = (dx + dy * TILE_SIZE) as usize * 4;
+                            tile[i] = (color.r * 255.0).clamp(0.0, 255.0) as u8;
+                            tile[i+1] = (color.g * 255.0).clamp(0.0, 255.0) as u8;
+                            tile[i+2] = (color.b * 255.0).clamp(0.0, 255.0) as u8;
+                            tile[i+3] = 255;
+                        }
+                    }
+                }
+                e.1 = None;
+            }
+        }
+        did_work
+    };
+    for _ in 0..20 {
+        step_cache_warmer(&mut scene, &mut gfx, camera_scale);
+    }
+    loop {
+
         while let Some(e) = input.next_event().await {
             let player = scene.sprites.get_mut(&player_id).unwrap();
             match e {
@@ -1098,8 +1260,10 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
         }
         while update_timer.tick() {
         //if update_timer.exhaust().is_some() {
-            scene.step_physics();
+            let player_loc = scene.sprites.get_mut(&player_id).unwrap().loc;
+            scene.step_physics(player_loc, camera_scale);
         }
+        step_cache_warmer(&mut scene, &mut gfx, camera_scale);
         if draw_timer.exhaust().is_some() {
             let player = scene.sprites.get_mut(&player_id).unwrap();
             camera.x = camera.x * 0.9 + (player.loc.x)*0.1;

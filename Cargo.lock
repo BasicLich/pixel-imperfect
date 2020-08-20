@@ -1058,6 +1058,7 @@ dependencies = [
 name = "miz_jam"
 version = "0.1.0"
 dependencies = [
+ "fnv",
  "golem",
  "image 0.23.8",
  "indexmap",
