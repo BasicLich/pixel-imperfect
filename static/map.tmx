@@ -664,7 +664,7 @@
  <objectgroup id="13" name="collectable">
   <object id="1380" gid="790" x="4526" y="6773" width="16" height="16"/>
   <object id="1381" gid="791" x="5540" y="6569" width="16" height="16"/>
-  <object id="1382" gid="792" x="5739" y="7012" width="16" height="16"/>
+  <object id="1382" gid="792" x="5739" y="6996" width="16" height="16"/>
   <object id="1383" gid="793" x="5880" y="7159" width="16" height="16"/>
  </objectgroup>
  <objectgroup id="6" name="test_player" tintcolor="#0000ff">
