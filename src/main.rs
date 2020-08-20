@@ -68,10 +68,10 @@ struct Sprite {
     jumping: bool,
     vy_slop: f32,
     color: Color,
-    scale_timer: Option<f32>,
-    pending_x_scale: i32,
-    pending_y_scale: i32,
+    potion_timer: Option<f32>,
+    pending_potions: Vec<PotionType>,
     sleep_timer: f32,
+    gravity: bool,
 }
 
 impl Sprite {
@@ -92,10 +92,10 @@ impl Sprite {
             jumping: false,
             vy_slop: 0.0,
             color,
-            scale_timer: None,
-            pending_x_scale: 0,
-            pending_y_scale: 0,
+            potion_timer: None,
+            pending_potions: Vec::new(),
             sleep_timer: 0.0,
+            gravity: true,
         }
     }
 
@@ -127,10 +127,10 @@ impl Sprite {
             jumping,
             vy_slop,
             color,
-            scale_timer,
-            pending_x_scale,
-            pending_y_scale,
+            potion_timer,
+            pending_potions,
             sleep_timer,
+            gravity,
         } = self;
         let new_x_scale = x_scale/2;
         let new_y_scale = y_scale/2;
@@ -154,10 +154,10 @@ impl Sprite {
                 jumping,
                 vy_slop,
                 color,
-                scale_timer,
-                pending_x_scale,
-                pending_y_scale,
+                potion_timer,
+                pending_potions: pending_potions.clone(),
                 sleep_timer,
+                gravity,
             }
         }).collect()
     }
@@ -505,10 +505,15 @@ impl CollisionTree {
 
 const TILE_SIZE: u32 = 256;
 
+#[derive(Copy, Clone)]
+enum PotionType {
+    Relative(i32, i32),
+    Absolute(Option<i32>, Option<i32>),
+}
 struct Scene {
     sprites: HashMap<usize, Sprite>,
     sprite_cache: HashMap<usize, Image>,
-    potions: Vec<(usize, i32, i32)>,
+    potions: Vec<(usize, PotionType)>,
     characters: Vec<usize>,
     particles: Vec<usize>,
     collision_map: CollisionTree,
@@ -565,9 +570,9 @@ impl Scene {
         id
     }
 
-    fn add_potion(&mut self, sprite: Sprite, x_delta: i32, y_delta: i32) -> usize {
+    fn add_potion(&mut self, sprite: Sprite, potion_type: PotionType) -> usize {
         let id = self.add_sprite(sprite);
-        self.potions.push((id, x_delta, y_delta));
+        self.potions.push((id, potion_type));
         id
     }
 
@@ -657,7 +662,9 @@ impl Scene {
                 sprite.loc.y += (y_dir.max(-1).min(1) * sprite.y_scale as i32) as f32;
             }
 
-            sprite.velocity.y += 3.4 / fps;
+            if sprite.gravity {
+                sprite.velocity.y += 3.4 / fps;
+            }
             let mut blocked_x = false;
             let mut blocked_y = false;
             let mut blocked_by_ground = false;
@@ -770,47 +777,62 @@ impl Scene {
         let mut consumed = HashSet::default();
         for character_id in &self.characters {
             let character = &self.sprites[character_id];
-            for (potion_id, x_delta, y_delta) in &self.potions {
+            for (potion_id, potion_type) in &self.potions {
                 if consumed.contains(potion_id) {
                     continue;
                 }
                 let potion = &self.sprites[potion_id];
                 if character.overlap(potion) {
                     consumed.insert(*potion_id);
-                    drinkers.push((*character_id, *x_delta, *y_delta));
+                    drinkers.push((*character_id, *potion_type));
                 }
             }
         }
         for potion_id in consumed {
-            self.potions.retain(|(id, _, _)| *id != potion_id);
+            self.potions.retain(|(id, _)| *id != potion_id);
             self.sprites.remove(&potion_id);
             self.sprite_cache.remove(&potion_id);
         }
         let mut new_sprites = vec![];
-        for (sprite_id, x_delta, y_delta) in drinkers {
+        for (sprite_id, potion_type) in drinkers {
             let sprite = self.sprites.get_mut(&sprite_id).unwrap();
-            let timer = sprite.scale_timer.get_or_insert(SCALE_CHANGE_TIMEOUT);
+            let timer = sprite.potion_timer.get_or_insert(SCALE_CHANGE_TIMEOUT);
             if *timer <= 0.0 {
                 *timer = SCALE_CHANGE_TIMEOUT;
             }
-            sprite.pending_x_scale += x_delta;
-            sprite.pending_y_scale += y_delta;
+            sprite.pending_potions.push(potion_type);
         }
 
         for character_id in self.characters.clone() {
             let sprite = self.sprites.get_mut(&character_id).unwrap();
-            if let Some(time) = sprite.scale_timer.as_mut() {
+            if let Some(time) = sprite.potion_timer.as_mut() {
                 *time -= 1.0/fps;
                 if *time > 0.0 {
                     continue
                 }
                 if *time < -1.0 {
-                    sprite.scale_timer.take();
+                    sprite.potion_timer.take();
                 }
-                let x_delta = sprite.pending_x_scale;
-                let y_delta = sprite.pending_y_scale;
-                sprite.pending_x_scale = 0;
-                sprite.pending_y_scale = 0;
+                let mut x_scale = sprite.x_scale as i32;
+                let mut y_scale = sprite.y_scale as i32;
+                for potion in sprite.pending_potions.drain(..) {
+                    match potion {
+                        PotionType::Relative(dx, dy) => {
+                            x_scale += dx;
+                            y_scale += dy;
+                        },
+                        PotionType::Absolute(x, y) => {
+                            if let Some(x) = x {
+                                x_scale = x;
+                            }
+                            if let Some(y) = y {
+                                y_scale = y;
+                            }
+                        },
+                    }
+                }
+                let x_delta = x_scale - sprite.x_scale as i32;
+                let y_delta = y_scale - sprite.y_scale as i32;
                 if x_delta == 0 && y_delta == 0 {
                     continue
                 }
@@ -938,7 +960,7 @@ impl Scene {
                 let sprite_image = &self.sprite_cache[sprite_id];
                 let region = Rectangle::new(Vector::new(((sprite.loc.x as i32 - x) as f32 /scale).floor(), ((sprite.loc.y as i32 - y) as f32/scale).floor()), Vector::new((w/scale).ceil(), (h/scale).ceil()));
                 gfx.draw_image(sprite_image, region);
-                if let Some(t) = sprite.scale_timer {
+                if let Some(t) = sprite.potion_timer {
                     if t > 0.0 {
                         let red_shift: u8 = ((t * (10.0 + ((SCALE_CHANGE_TIMEOUT - t) / SCALE_CHANGE_TIMEOUT) * 20.0).sin() + 1.0) * 255.0) as u8;
                         let mut pixels = [0; SPRITE_WIDTH*SPRITE_WIDTH*4];
@@ -1043,33 +1065,47 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
             if group.name == "player" || group.name == "test_player" {
                 player_id = Some(scene.add_character(Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, x_scale, y_scale, Color::BLUE)));
             } else if group.name == "objects" {
-                let x_delta = if let Some(v) = object.properties.get("x_delta") {
-                    match v {
-                        tiled::PropertyValue::IntValue(v) => *v,
-                        _ => 1,
-                    }
-                } else if let Some(v) = object.properties.get("delta") {
-                    match v {
-                        tiled::PropertyValue::IntValue(v) => *v,
-                        _ => 1,
-                    }
+                let (potion_type, color) = if object.properties.contains_key("x_absolute") || object.properties.contains_key("y_absolute") {
+                    let x_absolute = if let Some(v) = object.properties.get("x_absolute") {
+                        match v {
+                            tiled::PropertyValue::IntValue(v) => Some(*v),
+                            _ => None
+                        }
+                    } else { None };
+                    let y_absolute = if let Some(v) = object.properties.get("y_absolute") {
+                        match v {
+                            tiled::PropertyValue::IntValue(v) => Some(*v),
+                            _ => None
+                        }
+                    } else { None };
+                    (PotionType::Absolute(x_absolute, y_absolute), Color::RED)
                 } else {
-                    1
+                    let x_relative = if let Some(v) = object.properties.get("x_delta") {
+                        match v {
+                            tiled::PropertyValue::IntValue(v) => *v,
+                            _ => 1
+                        }
+                    } else { 1 };
+                    let y_relative = if let Some(v) = object.properties.get("y_delta") {
+                        match v {
+                            tiled::PropertyValue::IntValue(v) => *v,
+                            _ => 1
+                        }
+                    } else { 1 };
+                    let color = if x_relative+y_relative > 0 { Color::RED } else { Color::BLUE };
+                    (PotionType::Relative(x_relative, y_relative), color)
                 };
-                let y_delta = if let Some(v) = object.properties.get("y_delta") {
+                let mut potion = Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, x_scale, y_scale, color);
+                let gravity = if let Some(v) = object.properties.get("gravity") {
                     match v {
-                        tiled::PropertyValue::IntValue(v) => *v,
-                        _ => 1,
+                        tiled::PropertyValue::BoolValue(v) => *v,
+                        _ => true
                     }
-                } else if let Some(v) = object.properties.get("delta") {
-                    match v {
-                        tiled::PropertyValue::IntValue(v) => *v,
-                        _ => 1,
-                    }
-                } else {
-                    1
-                };
-                scene.add_potion(Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, x_scale, y_scale, if x_delta > 0 || y_delta > 0 { Color::RED } else { Color::BLUE }), x_delta, y_delta);
+                } else { true };
+                if !gravity {
+                    potion.gravity = false;
+                }
+                scene.add_potion(potion, potion_type);
             } else if group.name.starts_with("terrain") {
                 if preload {
                     scene.add_terrain(&Sprite::new(&sprites, tx as usize, ty as usize, object.x, object.y - object.height, x_scale, y_scale, Color::RED).maybe_flip(flipped));
@@ -1328,7 +1364,7 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
         while update_timer.tick() && !paused {
         //if update_timer.exhaust().is_some() {
             let player_loc = scene.sprites.get_mut(&player_id).unwrap().loc;
-            if let Some(timer) = scene.sprites.get(&player_id).unwrap().scale_timer {
+            if let Some(timer) = scene.sprites.get(&player_id).unwrap().potion_timer {
                 if timer < 0.0 {
                     fps = 60.0;
                 } else {
