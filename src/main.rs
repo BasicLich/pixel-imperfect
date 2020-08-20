@@ -1451,9 +1451,10 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
                 scene.particles.clear();
                 scene.collectables.clear();
                 scene.potions.clear();
-                scene.sprites.get_mut(&player_id).unwrap().loc = Vector::new(10000.0, 10000.0);
+                scene.sprites.get_mut(&player_id).unwrap().loc = Vector::new(10000.0, 30000.0);
                 for (i, mut collectable) in scene.collected.drain() {
                     collectable.gravity = false;
+                    collectable.velocity = Vector::new(0.0, 0.0);
                     if collectable.x_scale < 30 {
                         collectable.x_scale = 50;
                         collectable.y_scale = 50;
