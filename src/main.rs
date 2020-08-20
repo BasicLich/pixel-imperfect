@@ -24,8 +24,6 @@ const FOREGROUND_COLOR: Color = Color { r: 100.0/255.0, g: 200.0/255.0, b: 100.0
 const BACKGROUND_COLOR: Color = Color { r: 50.0/255.0, g: 50.0/255.0, b: 100.0/255.0, a: 1.0 };
 const TERRAIN_COLOR: Color = Color { r: 255.0, g: 255.0, b: 255.0, a: 1.0 };
 
-const FPS: f32 = 60.0;
-
 fn main() {
     run(
         Settings {
@@ -608,9 +606,9 @@ impl Scene {
         }
     }
 
-    fn step_physics(&mut self, camera: Vector, camera_scale: f32) {
+    fn step_physics(&mut self, camera: Vector, camera_scale: f32, fps: f32) {
         for sprite in self.sprites.values_mut() {
-            if camera.distance(sprite.loc) > 1920.0 / camera_scale {
+            if camera.distance(sprite.loc) > 1920.0 * camera_scale {
                 continue
             }
             if sprite.is_player {
@@ -643,7 +641,7 @@ impl Scene {
                 sprite.loc.y += (y_dir.max(-1).min(1) * sprite.y_scale as i32) as f32;
             }
 
-            sprite.velocity.y += 3.4 / FPS;
+            sprite.velocity.y += 3.4 / fps;
             let mut blocked_x = false;
             let mut blocked_y = false;
             let mut blocked_by_ground = false;
@@ -708,15 +706,15 @@ impl Scene {
             }
             if sprite.ground_contact {
                 if sprite.velocity.x >= 0.0 {
-                    sprite.velocity.x = (sprite.velocity.x - 1.0/FPS).max(0.0);
+                    sprite.velocity.x = (sprite.velocity.x - 1.0/fps).max(0.0);
                 } else {
-                    sprite.velocity.x = (sprite.velocity.x + 1.0/FPS).min(0.0);
+                    sprite.velocity.x = (sprite.velocity.x + 1.0/fps).min(0.0);
                 }
             }
             if sprite.velocity.x.abs() > 1.0 || sprite.velocity.y.abs() > 1.0 {
                 sprite.sleep_timer = 0.0;
             } else {
-                sprite.sleep_timer += 1.0/FPS;
+                sprite.sleep_timer += 1.0/fps;
             }
         }
 
@@ -775,8 +773,9 @@ impl Scene {
         let mut new_sprites = vec![];
         for (sprite_id, x_delta, y_delta) in drinkers {
             let sprite = self.sprites.get_mut(&sprite_id).unwrap();
-            if sprite.scale_timer.is_none() {
-                sprite.scale_timer = Some(SCALE_CHANGE_TIMEOUT);
+            let timer = sprite.scale_timer.get_or_insert(SCALE_CHANGE_TIMEOUT);
+            if *timer <= 0.0 {
+                *timer = SCALE_CHANGE_TIMEOUT;
             }
             sprite.pending_x_scale += x_delta;
             sprite.pending_y_scale += y_delta;
@@ -785,11 +784,13 @@ impl Scene {
         for character_id in self.characters.clone() {
             let sprite = self.sprites.get_mut(&character_id).unwrap();
             if let Some(time) = sprite.scale_timer.as_mut() {
-                *time -= 1.0/FPS;
+                *time -= 1.0/fps;
                 if *time > 0.0 {
                     continue
                 }
-                sprite.scale_timer.take();
+                if *time < -1.0 {
+                    sprite.scale_timer.take();
+                }
                 let x_delta = sprite.pending_x_scale;
                 let y_delta = sprite.pending_y_scale;
                 sprite.pending_x_scale = 0;
@@ -806,14 +807,14 @@ impl Scene {
                 //FIXME: Why is this offset necessary?
                 sprite.loc.y -= 8.0;
                 if x_delta > 0 || y_delta > 0 {
-                    let cx = sprite.loc.x + SPRITE_WIDTH as f32 / 2.0;
-                    let cy = sprite.loc.y + SPRITE_WIDTH as f32 / 2.0;
+                    let cx = sprite.loc.x + (SPRITE_WIDTH * sprite.x_scale as usize) as f32 / 2.0;
+                    let cy = sprite.loc.y + (SPRITE_WIDTH * sprite.y_scale as usize) as f32 / 2.0;
                     for dx in 0..SPRITE_WIDTH {
                         for dy in -1..SPRITE_WIDTH as i32-1 {
                             if true {
                                 let x = sprite.loc.x as i32 + dx as i32 * sprite.x_scale as i32;
                                 let y = sprite.loc.y as i32 + dy as i32 * sprite.y_scale as i32;
-                                if Vector::new(cx, cy).distance(Vector::new(x as f32, y as f32)) < SPRITE_WIDTH as f32 * sprite.x_scale.max(sprite.y_scale) as f32 {
+                                if Vector::new(cx, cy).distance(Vector::new(x as f32, y as f32)) < SPRITE_WIDTH as f32 * sprite.x_scale.max(sprite.y_scale) as f32 * 0.5 {
                                     if self.foreground_map.remove_rect(x, y, sprite.x_scale, sprite.y_scale).1 > 0 {
                                         for xx in 0..sprite.x_scale {
                                             for yy in 0..sprite.y_scale {
@@ -828,8 +829,8 @@ impl Scene {
                                         let mut collider = [false; SPRITE_WIDTH*SPRITE_WIDTH];
                                         collider[0] = true;
                                         let mut new_sprite = Sprite::from_collider(collider, x as f32, y as f32, sprite.x_scale, sprite.y_scale, Color::WHITE);
-                                        let a = (cy-y as f32).atan2(cx - x as f32) + std::f32::consts::FRAC_PI_4;
-                                        new_sprite.velocity = Vector::new(a.cos() * 100.0/FPS, a.sin() * 100.0/FPS);
+                                        let a = (cy-y as f32).atan2(cx - x as f32);
+                                        new_sprite.velocity = Vector::new(a.cos() * -0.5, a.sin() * -0.5);
                                         new_sprites.push(new_sprite);
                                         for xx in 0..sprite.x_scale {
                                             for yy in 0..sprite.y_scale {
@@ -922,28 +923,30 @@ impl Scene {
                 let region = Rectangle::new(Vector::new(((sprite.loc.x as i32 - x) as f32 /scale).floor(), ((sprite.loc.y as i32 - y) as f32/scale).floor()), Vector::new((w/scale).ceil(), (h/scale).ceil()));
                 gfx.draw_image(sprite_image, region);
                 if let Some(t) = sprite.scale_timer {
-                    let red_shift: u8 = ((t * (10.0 + ((SCALE_CHANGE_TIMEOUT - t) / SCALE_CHANGE_TIMEOUT) * 20.0).sin() + 1.0) * 255.0) as u8;
-                    let mut pixels = [0; SPRITE_WIDTH*SPRITE_WIDTH*4];
-                    for x in 0..SPRITE_WIDTH {
-                        for y in 0..SPRITE_WIDTH {
-                            let i = (x + y*SPRITE_WIDTH as usize);
-                            if sprite.collider[i] {
-                                pixels[i * 4] = red_shift;
-                                pixels[i * 4 + 1] = 0xff;
-                                pixels[i * 4 + 1] = 0xff;
-                                pixels[i * 4+ 3] = 100;
+                    if t > 0.0 {
+                        let red_shift: u8 = ((t * (10.0 + ((SCALE_CHANGE_TIMEOUT - t) / SCALE_CHANGE_TIMEOUT) * 20.0).sin() + 1.0) * 255.0) as u8;
+                        let mut pixels = [0; SPRITE_WIDTH*SPRITE_WIDTH*4];
+                        for x in 0..SPRITE_WIDTH {
+                            for y in 0..SPRITE_WIDTH {
+                                let i = (x + y*SPRITE_WIDTH as usize);
+                                if sprite.collider[i] {
+                                    pixels[i * 4] = red_shift;
+                                    pixels[i * 4 + 1] = 0xff;
+                                    pixels[i * 4 + 1] = 0xff;
+                                    pixels[i * 4+ 3] = 100;
+                                }
                             }
                         }
+                        let mut overlay = Image::from_raw(
+                            gfx,
+                            Some(&pixels),
+                            SPRITE_WIDTH as u32,
+                            SPRITE_WIDTH as u32,
+                            PixelFormat::RGBA,
+                        ).unwrap();
+                        overlay.set_magnification(golem::TextureFilter::Nearest).unwrap();
+                        gfx.draw_image(&overlay, region);
                     }
-                    let mut overlay = Image::from_raw(
-                        gfx,
-                        Some(&pixels),
-                        SPRITE_WIDTH as u32,
-                        SPRITE_WIDTH as u32,
-                        PixelFormat::RGBA,
-                    ).unwrap();
-                    overlay.set_magnification(golem::TextureFilter::Nearest).unwrap();
-                    gfx.draw_image(&overlay, region);
                 }
             }
         }
@@ -1105,9 +1108,10 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
         //player.collider[SPRITE_WIDTH-3 + 4 * SPRITE_WIDTH] = false;
     }
 
+    let mut fps = 60.0;
 
-    let mut update_timer = Timer::time_per_second(FPS);
-    let mut draw_timer = Timer::time_per_second(FPS);
+    let mut update_timer = Timer::time_per_second(fps);
+    let mut draw_timer = Timer::time_per_second(fps);
     let mut moving_left = false;
     let mut moving_right = false;
 
@@ -1219,9 +1223,9 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
                     match e.button() {
                         GamepadButton::South => {
                             if e.is_down() {
-                                if player.ground_contact {
+                                if player.ground_contact && !paused {
                                     player.jumping = true;
-                                    player.velocity.y = -80.0 / FPS;
+                                    player.velocity.y = -80.0 / fps;
                                 }
                             }
                         },
@@ -1270,9 +1274,9 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
                         },
                         Key::Up | Key::W => {
                             if e.is_down() {
-                                if player.ground_contact {
+                                if player.ground_contact && !paused {
                                     player.jumping = true;
-                                    player.velocity.y = -80.0 / FPS;
+                                    player.velocity.y = -80.0 / fps;
                                 }
                             } else {
                                 if !player.ground_contact && player.jumping {
@@ -1296,9 +1300,9 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
                 60.0
             };
             if moving_right {
-                player.velocity.x = vx / FPS;
+                player.velocity.x = vx / fps;
             } else if moving_left {
-                player.velocity.x = -vx / FPS;
+                player.velocity.x = -vx / fps;
             } else {
                 player.velocity.x = 0.0;
             }
@@ -1306,7 +1310,16 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
         while update_timer.tick() && !paused {
         //if update_timer.exhaust().is_some() {
             let player_loc = scene.sprites.get_mut(&player_id).unwrap().loc;
-            scene.step_physics(player_loc, camera_scale);
+            if let Some(timer) = scene.sprites.get(&player_id).unwrap().scale_timer {
+                if timer < 0.0 {
+                    fps = 60.0;
+                } else {
+                    fps = 60.0;
+                }
+            } else {
+                fps = 60.0;
+            }
+            scene.step_physics(player_loc, camera_scale, fps);
         }
         step_cache_warmer(&mut scene, &mut gfx, camera_scale);
         if draw_timer.exhaust().is_some() {

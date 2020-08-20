@@ -3,7 +3,7 @@
  <tileset firstgid="1" name="monochrome_transparent_packed" tilewidth="16" tileheight="16" tilecount="1056" columns="48">
   <image source="monochrome_transparent_packed.png" width="768" height="352"/>
  </tileset>
- <objectgroup id="1" name="background" tintcolor="#323264">
+ <objectgroup id="1" name="background" locked="1" tintcolor="#323264">
   <object id="1" gid="101" x="4737" y="6805" width="336" height="336"/>
   <object id="505" gid="101" x="3998" y="6814" width="336" height="336">
    <properties>
@@ -638,7 +638,7 @@
   <object id="901" gid="588" x="4309" y="4177" width="16" height="16"/>
   <object id="902" gid="782" x="4309" y="4163" width="16" height="16"/>
  </objectgroup>
- <objectgroup id="4" name="objects" locked="1" tintcolor="#ff0000">
+ <objectgroup id="4" name="objects" tintcolor="#ff0000">
   <object id="689" gid="658" x="5272" y="6773" width="16" height="16">
    <properties>
     <property name="x_delta" type="int" value="1"/>
@@ -669,7 +669,7 @@
   </object>
   <object id="757" gid="658" x="5384" y="7045" width="48" height="48">
    <properties>
-    <property name="delta" type="int" value="40"/>
+    <property name="delta" type="int" value="50"/>
    </properties>
   </object>
   <object id="758" gid="658" x="5434" y="7046" width="48" height="48">
@@ -709,8 +709,8 @@
    </properties>
   </object>
  </objectgroup>
- <objectgroup id="6" name="test_player" visible="0" locked="1" tintcolor="#0000ff">
-  <object id="228" gid="176" x="4203" y="4210" width="16" height="16"/>
+ <objectgroup id="6" name="test_player" visible="0" tintcolor="#0000ff">
+  <object id="228" gid="176" x="5617" y="6881" width="16" height="16"/>
  </objectgroup>
  <objectgroup id="7" name="player" locked="1">
   <object id="690" gid="176" x="4012" y="6772" width="48" height="48"/>
