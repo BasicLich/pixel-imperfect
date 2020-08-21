@@ -2,6 +2,8 @@ A tiny game about being huge and tiny and all the sizes in between. Made in 48 h
 
 Sprites from: [https://kenney.nl/assets/bit-pack]
 
+There's a quick postmortem about this project [here](Postmortem.md).
+
 
 Assuming you have the rust toolchain installed you should be able to run the game with:
 
