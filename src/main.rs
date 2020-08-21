@@ -1,8 +1,7 @@
 #![feature(clamp)]
 
-use fnv::{FnvHashMap as HashMap, FnvHashSet as HashSet};
 use image::GenericImageView;
-use indexmap::IndexSet;
+use indexmap::{IndexMap as HashMap, IndexSet};
 
 use quicksilver::{
     geom::{Rectangle, Vector},
@@ -12,12 +11,12 @@ use quicksilver::{
 };
 
 const SPRITES: &[u8] = include_bytes!("../static/monochrome_transparent_packed.png");
-const SPRITES_WIDTH: usize = 768;
-const SPRITES_HEIGHT: usize = 352;
 const SPRITE_WIDTH: usize = 16;
-const PIXEL_CHUNK: u32 = 4;
 const MAX_SCALE: usize = 180;
 const SCALE_CHANGE_TIMEOUT: f32 = 1.0;
+const TILE_SIZE: u32 = 256;
+
+const COLLISION_MAP_LEAF_SIZE: usize = 64;
 
 const FOREGROUND_COLOR: Color = Color {
     r: 100.0 / 255.0,
@@ -224,20 +223,12 @@ impl Sprite {
             let c = a.intersection(b);
             for x in c.x..c.x + c.w {
                 for y in c.y..c.y + c.h {
-                    let (dx, dy) = to_scale(
-                        x as i32 - self.loc.x as i32,
-                        y as i32 - self.loc.y as i32,
-                        self.x_scale,
-                        self.y_scale,
-                    );
+                    let dx = (x as i32 - self.loc.x as i32) / self.x_scale as i32;
+                    let dy = (y as i32 - self.loc.y as i32) / self.y_scale as i32;
                     let ai = dx as usize + dy as usize * SPRITE_WIDTH;
                     if self.collider[ai] {
-                        let (dx, dy) = to_scale(
-                            x as i32 - other.loc.x as i32,
-                            y as i32 - other.loc.y as i32,
-                            other.x_scale,
-                            other.y_scale,
-                        );
+                        let dx = (x as i32 - other.loc.x as i32) / other.x_scale as i32;
+                        let dy = (y as i32 - other.loc.y as i32) / other.y_scale as i32;
                         let bi = dx as usize + dy as usize * SPRITE_WIDTH;
                         if other.collider[bi] {
                             return true;
@@ -259,7 +250,7 @@ impl Sprite {
                 pixels[i * 4 + 3] = 0xff;
             }
         }
-        let mut image = Image::from_raw(
+        let image = Image::from_raw(
             gfx,
             Some(&pixels),
             SPRITE_WIDTH as u32,
@@ -274,7 +265,6 @@ impl Sprite {
     }
 }
 
-const LEAF_SIZE: usize = 64;
 struct CollisionTree {
     x: i32,
     y: i32,
@@ -282,7 +272,7 @@ struct CollisionTree {
     height: u32,
     free_pixels: u32,
     children: Option<Vec<CollisionTree>>,
-    grid: Option<[bool; LEAF_SIZE * LEAF_SIZE]>,
+    grid: Option<[bool; COLLISION_MAP_LEAF_SIZE * COLLISION_MAP_LEAF_SIZE]>,
 }
 
 impl CollisionTree {
@@ -332,7 +322,9 @@ impl CollisionTree {
                     }
                 }
             } else {
-                if self.width * self.height > (LEAF_SIZE * LEAF_SIZE) as u32 {
+                if self.width * self.height
+                    > (COLLISION_MAP_LEAF_SIZE * COLLISION_MAP_LEAF_SIZE) as u32
+                {
                     self.children = Some(vec![
                         CollisionTree::new(self.x, self.y, self.width / 2, self.height / 2),
                         CollisionTree::new(
@@ -369,7 +361,8 @@ impl CollisionTree {
                     }
                 } else {
                     if self.grid.is_none() {
-                        self.grid.replace([false; LEAF_SIZE * LEAF_SIZE]);
+                        self.grid
+                            .replace([false; COLLISION_MAP_LEAF_SIZE * COLLISION_MAP_LEAF_SIZE]);
                     }
                     let i = ((x - self.x) + (y - self.y) * self.width as i32) as usize;
                     let p = &mut self.grid.as_mut().unwrap()[i];
@@ -464,8 +457,11 @@ impl CollisionTree {
         {
             let change = self.free_pixels;
             self.free_pixels = 0;
-            if self.width * self.height <= (LEAF_SIZE * LEAF_SIZE) as u32 {
-                self.grid.replace([true; LEAF_SIZE * LEAF_SIZE]);
+            if self.width * self.height
+                <= (COLLISION_MAP_LEAF_SIZE * COLLISION_MAP_LEAF_SIZE) as u32
+            {
+                self.grid
+                    .replace([true; COLLISION_MAP_LEAF_SIZE * COLLISION_MAP_LEAF_SIZE]);
             } else {
                 if self.children.is_none() {
                     self.children = Some(vec![
@@ -492,16 +488,17 @@ impl CollisionTree {
                 }
                 if let Some(children) = self.children.as_mut() {
                     for child in children {
-                        child.insert_rect(x, y, width, height);
+                        child.insert_rect(x, y, width, height)?;
                     }
                 }
             }
             return Ok(change);
         }
 
-        if self.width * self.height <= (LEAF_SIZE * LEAF_SIZE) as u32 {
+        if self.width * self.height <= (COLLISION_MAP_LEAF_SIZE * COLLISION_MAP_LEAF_SIZE) as u32 {
             if self.grid.is_none() {
-                self.grid.replace([false; LEAF_SIZE * LEAF_SIZE]);
+                self.grid
+                    .replace([false; COLLISION_MAP_LEAF_SIZE * COLLISION_MAP_LEAF_SIZE]);
             }
             if let Some(grid) = &mut self.grid {
                 let mut inserted = 0;
@@ -611,7 +608,6 @@ impl CollisionTree {
             self.free_pixels += removed;
             return (!keep, removed);
         }
-        (false, 0)
     }
 
     fn check_rect(&self, x: i32, y: i32, width: u32, height: u32) -> bool {
@@ -661,8 +657,6 @@ impl CollisionTree {
     }
 }
 
-const TILE_SIZE: u32 = 256;
-
 #[derive(Copy, Clone)]
 enum PotionType {
     Relative(i32, i32),
@@ -694,18 +688,6 @@ struct Scene {
     final_potion_triggered: bool,
     end_sequence_triggered: bool,
     done: bool,
-}
-
-fn to_scale(x: i32, y: i32, x_scale: u32, y_scale: u32) -> (i32, i32) {
-    let x = x / x_scale as i32;
-    let y = y / y_scale as i32;
-    (x, y)
-}
-
-fn from_scale(x: i32, y: i32, x_scale: u32, y_scale: u32) -> (i32, i32) {
-    let x = x * x_scale as i32;
-    let y = y * y_scale as i32;
-    (x, y)
 }
 
 impl Scene {
@@ -869,9 +851,7 @@ impl Scene {
             if sprite.gravity {
                 sprite.velocity.y += 3.4 / fps;
             }
-            let mut blocked_x = false;
             let mut blocked_y = false;
-            let mut blocked_by_ground = false;
             let mut in_rubble = false;
             let falling = sprite.velocity.y > 0.0;
             for (mut vx, mut vy) in vec![
@@ -918,9 +898,7 @@ impl Scene {
                                         sprite.x_scale,
                                         sprite.y_scale,
                                     ) {
-                                        if vx.abs() >= 1 {
-                                            blocked_x = true;
-                                        } else {
+                                        if vy.abs() >= 1 {
                                             blocked_y = true;
                                         }
                                         break 'outer;
@@ -1004,7 +982,7 @@ impl Scene {
             }
         }
 
-        let mut to_remove = HashSet::default();
+        let mut to_remove: IndexSet<usize> = IndexSet::default();
         for particle_id in &self.particles {
             let sprite = &self.sprites[particle_id];
             if sprite.loc.y > 30000.0 {
@@ -1026,8 +1004,8 @@ impl Scene {
                                     let y = sprite.loc.y as i32
                                         + y as i32 * sprite.y_scale as i32
                                         + dy as i32;
-                                    self.collision_map.insert(x, y);
-                                    self.rubble_map.insert(x, y);
+                                    self.collision_map.insert(x, y).unwrap();
+                                    self.rubble_map.insert(x, y).unwrap();
                                     self.tile_cache
                                         .entry((x / TILE_SIZE as i32, y / TILE_SIZE as i32))
                                         .or_default()
@@ -1048,8 +1026,8 @@ impl Scene {
         self.sprites.retain(|pid, _| !to_remove.contains(pid));
 
         let mut drinkers = vec![];
-        let mut consumed = HashSet::default();
-        let mut collected = HashSet::default();
+        let mut consumed: IndexSet<usize> = IndexSet::default();
+        let mut collected: IndexSet<usize> = IndexSet::default();
         let mut start_end = false;
         for character_id in &self.characters {
             let character = &self.sprites[character_id];
@@ -1270,8 +1248,6 @@ impl Scene {
     }
 
     fn draw(&mut self, gfx: &mut Graphics, x: i32, y: i32, width: u32, height: u32, scale: f32) {
-        let pwidth = width;
-        let pheight = height;
         let x = x - (width as f32 * scale * 0.5) as i32;
         let y = y - (height as f32 * scale * 0.5) as i32;
         let width = (width as f32 * scale) as u32;
@@ -1290,20 +1266,20 @@ impl Scene {
                             ((xx * TILE_SIZE as i32 - x) as f32 / scale).floor(),
                             ((yy * TILE_SIZE as i32 - y) as f32 / scale).floor(),
                         ),
-                        (Vector::new(
+                        Vector::new(
                             (TILE_SIZE as f32 / scale).ceil(),
                             (TILE_SIZE as f32 / scale).ceil(),
-                        )),
+                        ),
                     );
                     for ((data, image), ref mut accumulator) in vec![
                         (background, &mut background_tiles),
                         (terrain, &mut terrain_tiles),
                         (foreground, &mut foreground_tiles),
                     ] {
-                        if let Some(tile) = image {
+                        if let Some(_tile) = image {
                             accumulator.push((region, (xx, yy)));
                         } else if let Some(data) = data {
-                            let mut tile = Image::from_raw(
+                            let tile = Image::from_raw(
                                 gfx,
                                 Some(data),
                                 TILE_SIZE,
@@ -1360,7 +1336,7 @@ impl Scene {
                         let mut pixels = [0; SPRITE_WIDTH * SPRITE_WIDTH * 4];
                         for x in 0..SPRITE_WIDTH {
                             for y in 0..SPRITE_WIDTH {
-                                let i = (x + y * SPRITE_WIDTH as usize);
+                                let i = x + y * SPRITE_WIDTH as usize;
                                 if sprite.collider[i] {
                                     pixels[i * 4] = red_shift;
                                     pixels[i * 4 + 1] = 0xff;
@@ -1369,7 +1345,7 @@ impl Scene {
                                 }
                             }
                         }
-                        let mut overlay = Image::from_raw(
+                        let overlay = Image::from_raw(
                             gfx,
                             Some(&pixels),
                             SPRITE_WIDTH as u32,
@@ -1453,7 +1429,6 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
     let mut scene = Scene::new();
     let mut player_id = None;
     let mut negative_terrain = vec![];
-    let mut terrain_locations: HashSet<(u32, i32, i32)> = HashSet::default();
     let mut terrain_chunks = vec![];
     for group in &map.object_groups {
         if !group.visible {
@@ -1712,25 +1687,14 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
         scene.sprite_cache.insert(*sprite_id, sprite.image(&gfx));
     }
 
-    let mut terrain_locations: Vec<_> = terrain_locations
-        .into_iter()
-        .map(|(l, x, y)| (l, Vector::new(x as f32, y as f32)))
-        .collect();
-
     let player_id = player_id.unwrap();
 
-    let mut camera = Vector::new(0.0, 0.0);
-    let mut camera_scale = 8.0;
     let mut setup_end = false;
-    {
-        let player = scene.sprites.get_mut(&player_id).unwrap();
-        player.is_player = true;
-        camera.x = player.loc.x;
-        camera.y = player.loc.y;
-        camera_scale = player.x_scale.max(player.y_scale) as f32;
-        //player.collider[2 + 4 * SPRITE_WIDTH] = false;
-        //player.collider[SPRITE_WIDTH-3 + 4 * SPRITE_WIDTH] = false;
-    }
+
+    let player = scene.sprites.get_mut(&player_id).unwrap();
+    player.is_player = true;
+    let mut camera = player.loc;
+    let mut camera_scale = player.x_scale.max(player.y_scale) as f32;
 
     let mut fps = 60.0;
 
@@ -1739,7 +1703,7 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
     let mut moving_left = false;
     let mut moving_right = false;
 
-    let mut step_cache_warmer = |scene: &mut Scene, gfx: &mut Graphics, camera_scale: f32| {
+    let mut step_cache_warmer = |scene: &mut Scene, _gfx: &mut Graphics, camera_scale: f32| {
         let mut did_work = false;
         if !terrain_chunks.is_empty() {
             let player_loc = scene.sprites[&player_id].loc;
@@ -1952,7 +1916,7 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
                 scene.collectables.clear();
                 scene.potions.clear();
                 scene.sprites.get_mut(&player_id).unwrap().loc = Vector::new(10000.0, 30000.0);
-                for (i, mut collectable) in scene.collected.drain() {
+                for (i, mut collectable) in scene.collected.drain(..) {
                     collectable.gravity = false;
                     collectable.velocity = Vector::new(0.0, 0.0);
                     if collectable.x_scale < 30 {
