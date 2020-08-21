@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<map version="1.4" tiledversion="1.4.2" orientation="orthogonal" renderorder="right-down" width="10000" height="10000" tilewidth="16" tileheight="16" infinite="0" nextlayerid="14" nextobjectid="1480">
+<map version="1.4" tiledversion="1.4.2" orientation="orthogonal" renderorder="right-down" width="10000" height="10000" tilewidth="16" tileheight="16" infinite="0" nextlayerid="14" nextobjectid="1496">
  <tileset firstgid="1" name="monochrome_transparent_packed" tilewidth="16" tileheight="16" tilecount="1056" columns="48">
   <image source="monochrome_transparent_packed.png" width="768" height="352"/>
  </tileset>
- <objectgroup id="1" name="background-big" locked="1" tintcolor="#323264">
+ <objectgroup id="1" name="background-big" tintcolor="#323264">
   <object id="1" gid="101" x="4764" y="8587" width="336" height="336"/>
   <object id="505" gid="101" x="4025" y="8596" width="336" height="336">
    <properties>
@@ -78,7 +78,7 @@
  </objectgroup>
  <objectgroup id="12" name="background-secondary" locked="1"/>
  <objectgroup id="11" name="background-small" locked="1"/>
- <objectgroup id="3" name="terrain-big" locked="1">
+ <objectgroup id="3" name="terrain-big">
   <object id="21" gid="249" x="4737" y="8570" width="16" height="16"/>
   <object id="22" gid="249" x="4721" y="8570" width="16" height="16"/>
   <object id="23" gid="249" x="4753" y="8570" width="16" height="16"/>
@@ -553,7 +553,7 @@
   <object id="1445" gid="248" x="5548" y="9539" width="16" height="16"/>
   <object id="1446" gid="291" x="5563" y="9542" width="16" height="16"/>
  </objectgroup>
- <objectgroup id="4" name="objects" locked="1" tintcolor="#ff0000">
+ <objectgroup id="4" name="objects" tintcolor="#ff0000">
   <object id="689" gid="658" x="5299" y="8555" width="16" height="16">
    <properties>
     <property name="x_delta" type="int" value="1"/>
@@ -733,13 +733,13 @@
    </properties>
   </object>
  </objectgroup>
- <objectgroup id="6" name="test_player" visible="0" tintcolor="#0000ff">
-  <object id="228" gid="176" x="5351" y="4607" width="32" height="32"/>
+ <objectgroup id="6" name="test_player" visible="0" locked="1" tintcolor="#0000ff">
+  <object id="228" gid="176" x="9764" y="8835" width="176" height="176"/>
  </objectgroup>
  <objectgroup id="7" name="player">
   <object id="690" gid="176" x="4085" y="8557" width="48" height="48"/>
  </objectgroup>
- <objectgroup id="2" name="foreground" locked="1" tintcolor="#64c864">
+ <objectgroup id="2" name="foreground" tintcolor="#64c864">
   <object id="2" gid="101" x="4221" y="8609" width="336" height="336">
    <properties>
     <property name="preload" type="bool" value="true"/>

@@ -1087,7 +1087,8 @@ impl TerrainChunk {
 
 async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> {
     let sprites = image::load(std::io::Cursor::new(SPRITES), image::ImageFormat::Png).unwrap();
-    let map_data = include_bytes!("../static/map.tmx").to_vec();//quicksilver::load_file("map.tmx").await.expect("The file was not found!");
+    //let map_data = include_bytes!("../static/map.tmx").to_vec();//quicksilver::load_file("map.tmx").await.expect("The file was not found!");
+    let map_data = quicksilver::load_file("map.tmx").await.expect("The file was not found!");
     let map = tiled::parse(&*map_data).unwrap();
     let mut scene = Scene::new();
     let mut player_id = None;
@@ -1409,6 +1410,9 @@ async fn app(window: Window, mut gfx: Graphics, mut input: Input) -> Result<()> 
                                 } 
 
                             }
+                        },
+                        Key::Q => {
+                            std::process::exit(0);
                         },
                         _ => (),
                     }
